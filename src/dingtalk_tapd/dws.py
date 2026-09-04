@@ -118,7 +118,8 @@ class DwsClient:
             raise ValueError("群名查询不能为空")
         payload = self._run_json(["+chat-search", "--query", query, "--page-all"])
         groups: list[DingTalkGroup] = []
-        for item in self._items(payload, ("groups", "items", "data", "results")):
+        # DWS 群搜索的稳定投影使用 chats 包装；保留旧字段兼容不同 CLI 版本。
+        for item in self._items(payload, ("groups", "chats", "items", "data", "results")):
             name = self._first_text(item, ("name", "title", "groupName", "conversationName"))
             conversation_id = self._first_text(
                 item,
