@@ -25,6 +25,7 @@ class McpTapdClient:
     timeout_seconds: float = 30.0
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False, repr=False)
     _next_id: int = field(default=0, init=False, repr=False)
+    _media_supported: bool | None = field(default=None, init=False, repr=False)
 
     def _ensure_started(self) -> None:
         """按需启动 stdio server 并完成 MCP initialize 握手。"""
@@ -195,9 +196,13 @@ class McpTapdClient:
 
         if draft.issue_type is not IssueType.BUG:
             raise ValueError("create_bug 只接受 bug 草稿")
+        options = self._options(draft)
+        # 旧版 PyPI MCP 未声明 media；探测工具契约后再传，避免未知参数让整单失败。
+        if options.get("media") and not self._supports_media():
+            options.pop("media", None)
         return self._call_tool(
             "create_bug",
-            {"workspace_id": draft.workspace_id, "title": draft.title, "options": self._options(draft)},
+            {"workspace_id": draft.workspace_id, "title": draft.title, "options": options},
         )
 
     def create_story_or_task(self, draft: IssueDraft) -> Any:
@@ -266,6 +271,19 @@ class McpTapdClient:
             options["custom_fields"] = custom_fields
         return options
 
+    def _supports_media(self) -> bool:
+        """读取一次 tools/list，兼容声明富媒体与未声明富媒体的 MCP 版本。"""
+
+        if self._media_supported is not None:
+            return self._media_supported
+        try:
+            result = self._rpc("tools/list")
+        except McpTapdError:
+            self._media_supported = False
+            return False
+        self._media_supported = _tool_supports_media(result)
+        return self._media_supported
+
     def __del__(self) -> None:
         """在解释器回收时尽力释放 MCP 子进程，显式 close 仍是首选。"""
 
@@ -273,3 +291,19 @@ class McpTapdClient:
             self.close()
         except Exception:
             pass
+
+
+def _tool_supports_media(payload: Any) -> bool:
+    """在工具描述或输入 schema 中查找 media/image/video 能力声明。"""
+
+    if not isinstance(payload, Mapping):
+        return False
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, Mapping) or tool.get("name") != "create_bug":
+            continue
+        encoded = json.dumps(tool, ensure_ascii=False).lower()
+        return any(token in encoded for token in ("media", "image_url", "video_url"))
+    return False

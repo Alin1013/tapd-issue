@@ -116,6 +116,7 @@ class IssueAnalyzer:
     relevant_terms = ("企业知识中心", "企业知识", "知识中心", "知识库", "知识管理")
     urgent_terms = ("p0", "紧急", "线上全量", "数据丢失", "完全不可用")
     high_terms = ("失败", "报错", "异常", "无法", "卡死", "转圈", "崩溃", "不触发", "阻塞", "丢失")
+    low_signal_terms = ("建议", "优化", "体验", "偶发", "咨询", "请问", "能否")
 
     def __init__(self, config: AutomationConfig) -> None:
         self.config = config
@@ -148,14 +149,16 @@ class IssueAnalyzer:
         return first[:80] or "企业知识中心问题"
 
     def _priority(self, combined: str) -> str:
-        """按影响词映射 TAPD 标准优先级；普通反馈默认高以避免遗漏用户阻断问题。"""
+        """按影响词映射 TAPD 标准优先级；无法判断时使用中优先级而非伪造紧急程度。"""
 
         lowered = combined.lower()
         if any(term in lowered for term in self.urgent_terms):
             return "urgent"
         if any(term in lowered for term in self.high_terms):
             return "high"
-        return "high"
+        if any(term in lowered for term in self.low_signal_terms):
+            return "low"
+        return "medium"
 
     @staticmethod
     def _description(
@@ -189,7 +192,12 @@ class IssueAnalyzer:
                 status = f"本地文件：`{download.local_path}`" if download.succeeded else "下载失败"
                 if download.error:
                     status += f"（{download.error}）"
+                if download.url:
+                    status += f"；直链：{download.url}"
                 lines.append(f"- `{download.resource_id}`：{status}")
+        direct_refs = tuple(ref for ref in event.resource_refs if ref.startswith(("http://", "https://")))
+        if direct_refs:
+            lines.extend(["", "## 附件直链", *[f"- {ref}" for ref in direct_refs]])
         return "\n".join(lines)
 
 

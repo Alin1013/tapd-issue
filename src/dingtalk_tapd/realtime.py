@@ -19,6 +19,17 @@ from .dws import DwsClient, DwsError
 logger = logging.getLogger(__name__)
 
 
+def _redact_log_line(line: str) -> str:
+    """移除可能由外部 CLI 回显的进程环境凭据，避免状态日志泄露密钥。"""
+
+    redacted = line
+    for name in ("TAPD_ACCESS_TOKEN", "TAPD_API_USER", "TAPD_API_PASSWORD", "DWS_CLIENT_SECRET"):
+        value = os.getenv(name)
+        if value:
+            redacted = redacted.replace(value, "[REDACTED]")
+    return redacted
+
+
 class RealtimeEventError(DwsError):
     """DWS 实时进程启动、就绪或事件解析失败。"""
 
@@ -162,7 +173,7 @@ class RealtimeEventListener:
                 if "[event] ready " in stripped or "[event] ready" in stripped:
                     self._ready.set()
                 if stripped:
-                    logger.info("DWS: %s", stripped)
+                    logger.info("DWS: %s", _redact_log_line(stripped))
         finally:
             self._stderr_done.set()
 
