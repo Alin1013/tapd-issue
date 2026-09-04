@@ -10,7 +10,7 @@ python3 -m venv .venv
 pip install -e .
 ```
 
-运行时需要本机已登录的 `dws` CLI。TAPD 写入使用以下环境变量之一：
+运行时需要本机已登录的 `dws` CLI。TAPD 默认通过官方 `mcp-server-tapd`（命令为 `uvx mcp-server-tapd`）调用，令牌由 MCP Server 从以下环境变量读取：
 
 ```bash
 export TAPD_ACCESS_TOKEN=...
@@ -19,7 +19,9 @@ export TAPD_API_USER=...
 export TAPD_API_PASSWORD=...
 ```
 
-可选环境变量：`DWS_EXECUTABLE`、`DWS_PROFILE`、`TAPD_API_BASE_URL`、`TAPD_BASE_URL`。
+可选环境变量：`DWS_EXECUTABLE`、`DWS_PROFILE`、`TAPD_BACKEND`（默认 `mcp`，可设为 `rest`）、`TAPD_MCP_COMMAND`、`TAPD_API_BASE_URL`、`TAPD_BASE_URL`。
+
+只有在明确设置 `TAPD_BACKEND=rest` 时才使用内置 REST 兼容客户端；生产环境建议使用 MCP 后端，以复用设计文档中列出的官方工具契约。
 
 ## 使用
 
@@ -50,6 +52,8 @@ dingtalk-tapd create \
 ```
 
 `--type` 支持 `bug`、`stories`、`tasks`。自定义字段使用 JSON 对象传入，例如 `--fields-json '{"priority":"高"}'`；生产环境应先查看命令输出的 TAPD 字段定义再填写。
+
+不确定项目 ID 时，可以改用 `--user-name`。只有 TAPD 返回恰好一个参与项目时才会继续；多个项目会要求显式提供 `--workspace-id`。
 
 ## 安全边界
 

@@ -17,6 +17,7 @@ from .orchestrator import (
     issue_draft_to_dict,
     search_result_to_dict,
 )
+from .mcp import McpTapdClient
 from .tapd import TapdClient, TapdError
 
 
@@ -54,9 +55,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def _add_draft_arguments(parser: argparse.ArgumentParser) -> None:
     """注册 TAPD 草稿参数；实体类型只允许文档约定的三种值。"""
 
-    parser.add_argument("--workspace-id", required=True)
+    parser.add_argument("--workspace-id", help="TAPD 项目 ID；不提供时通过 --user-name 消歧")
+    parser.add_argument("--user-name", help="TAPD 用户昵称，用于查询参与项目")
     parser.add_argument("--type", dest="issue_type", choices=tuple(issue.value for issue in IssueType), required=True)
     parser.add_argument("--title", help="覆盖自动生成的工单标题")
+    parser.add_argument("--owner", help="负责人")
+    parser.add_argument("--priority", help="优先级")
+    parser.add_argument("--severity", help="严重程度（缺陷）")
     parser.add_argument("--fields-json", help="自定义字段 JSON 对象")
 
 
@@ -77,20 +82,34 @@ def _parse_fields(value: str | None) -> dict[str, Any]:
 def _workflow() -> Workflow:
     """按环境变量创建客户端；令牌仅由客户端在请求时读取。"""
 
-    return Workflow(DwsClient(DwsConfig.from_env()), TapdClient(TapdConfig.from_env()))
+    tapd_config = TapdConfig.from_env()
+    if tapd_config.backend == "mcp":
+        tapd = McpTapdClient(tapd_config)
+    elif tapd_config.backend == "rest":
+        tapd = TapdClient(tapd_config)
+    else:
+        raise ValueError("TAPD_BACKEND 只能是 mcp 或 rest")
+    return Workflow(DwsClient(DwsConfig.from_env()), tapd)
 
 
 def _prepare(workflow: Workflow, args: argparse.Namespace) -> tuple[SearchResult, IssueDraft]:
     """执行检索和草稿构建，不触发任何 TAPD 写操作。"""
 
     result = workflow.search(args.group, args.keyword, start=args.start, end=args.end, order=args.order)
+    fields = _parse_fields(args.fields_json)
+    # 基础字段单独暴露，确保确认预览中能看见负责人/优先级/严重程度。
+    for key in ("owner", "priority", "severity"):
+        value = getattr(args, key, None)
+        if value:
+            fields[key] = value
+    workspace_id = workflow.resolve_workspace_id(args.workspace_id, args.user_name)
     draft = workflow.build_draft(
         result,
-        args.workspace_id,
+        workspace_id,
         IssueType(args.issue_type),
         args.keyword,
         title=args.title,
-        fields=_parse_fields(args.fields_json),
+        fields=fields,
     )
     return result, draft
 
@@ -105,6 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """运行 CLI，返回适合 shell 的退出码而不吞掉业务错误。"""
 
     args = _build_parser().parse_args(argv)
+    workflow: Workflow | None = None
     try:
         workflow = _workflow()
         if args.command == "search":
@@ -120,14 +140,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if result.is_partial and not args.allow_partial:
             raise ValueError("检索结果为 partial；请缩小范围或显式使用 --allow-partial")
         # 写入前仍先读取项目元数据和自定义字段，让用户确认真实目标与字段定义。
-        workspace = workflow.tapd.get_workspace_info(draft.workspace_id)
-        custom_fields = workflow.tapd.get_entity_custom_fields(draft.workspace_id, draft.issue_type)
+        confirmation = workflow.confirmation_context(draft)
         if not args.confirm:
             _json_print(
                 {
                     "confirmationRequired": True,
-                    "workspace": workspace,
-                    "customFields": custom_fields,
+                    **confirmation,
                     "search": search_result_to_dict(result),
                     "draft": issue_draft_to_dict(draft),
                 }
@@ -139,6 +157,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (DwsError, TapdError, ConfirmationRequired, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
+    finally:
+        if workflow is not None and hasattr(workflow.tapd, "close"):
+            workflow.tapd.close()
 
 
 if __name__ == "__main__":

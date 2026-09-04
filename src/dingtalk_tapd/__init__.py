@@ -9,7 +9,8 @@ from .models import (
     SearchResult,
     SourceReference,
 )
-from .orchestrator import ConfirmationRequired, Workflow
+from .orchestrator import ConfirmationRequired, Workflow, WorkspaceResolutionError
+from .mcp import McpTapdClient, McpTapdError
 from .dws import DwsClient, DwsError, GroupResolutionError
 from .tapd import TapdApiError, TapdClient, TapdError
 
@@ -23,6 +24,9 @@ __all__ = [
     "SourceReference",
     "ConfirmationRequired",
     "Workflow",
+    "WorkspaceResolutionError",
+    "McpTapdClient",
+    "McpTapdError",
     "DwsClient",
     "DwsError",
     "GroupResolutionError",

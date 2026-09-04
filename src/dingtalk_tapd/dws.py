@@ -186,7 +186,17 @@ class DwsClient:
         refs = item.get("resourceRefs") or item.get("resource_refs") or ()
         if isinstance(refs, str):
             refs = (refs,)
-        resource_refs = tuple(ref for ref in refs if isinstance(ref, str)) if isinstance(refs, Sequence) else ()
+        if isinstance(refs, Sequence) and not isinstance(refs, (str, bytes)):
+            # 资源引用可能是 URL 字符串，也可能是带 uri/id 的对象；两者都不能丢失。
+            resource_refs = tuple(
+                ref
+                if isinstance(ref, str)
+                else cls._first_text(ref, ("url", "uri", "resourceRef", "id"), json.dumps(ref, ensure_ascii=False))
+                for ref in refs
+                if isinstance(ref, (str, Mapping))
+            )
+        else:
+            resource_refs = ()
         return DingTalkMessage(message_id, conversation_id, sender_name, text, created_at, resource_refs)
 
     @staticmethod
@@ -195,10 +205,15 @@ class DwsClient:
 
         if not isinstance(payload, Mapping):
             return PaginationLedger(complete=False, stop_reason="invalid-payload")
-        metadata = payload
-        nested = payload.get("pagination") or payload.get("meta")
-        if isinstance(nested, Mapping):
-            metadata = {**payload, **nested}
+        metadata: dict[str, Any] = dict(payload)
+        # 分页元数据有时位于顶层、pagination/meta 或 data.pagination 中。
+        containers: list[Any] = [payload.get("pagination"), payload.get("meta")]
+        data = payload.get("data")
+        if isinstance(data, Mapping):
+            containers.extend([data, data.get("pagination"), data.get("meta")])
+        for container in containers:
+            if isinstance(container, Mapping):
+                metadata.update(container)
         failures_value = metadata.get("failures") or ()
         if isinstance(failures_value, Sequence) and not isinstance(failures_value, str):
             failures = tuple(
@@ -208,6 +223,8 @@ class DwsClient:
         else:
             failures = (str(failures_value),) if failures_value else ()
         next_page = metadata.get("nextPage") or metadata.get("next_page")
+        if isinstance(next_page, str) and next_page.isdigit():
+            next_page = int(next_page)
         return PaginationLedger(
             complete=metadata.get("complete") is True,
             has_more=metadata.get("hasMore") is True or metadata.get("has_more") is True,

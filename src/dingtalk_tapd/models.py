@@ -58,15 +58,21 @@ class PaginationLedger:
     complete: bool
     has_more: bool = False
     next_cursor: str | None = None
-    next_page: int | None = None
+    next_page: int | str | None = None
     stop_reason: str | None = None
     failures: tuple[str, ...] = ()
 
     @property
     def is_complete(self) -> bool:
-        """只有明确完成且没有后续页或失败，结果才可用于完整性声明。"""
+        """只有明确完成且没有后续页、游标或失败，结果才可用于完整性声明。"""
 
-        return self.complete and not self.has_more and not self.failures
+        return (
+            self.complete
+            and not self.has_more
+            and not self.next_cursor
+            and self.next_page is None
+            and not self.failures
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +98,7 @@ class SourceReference:
     message_id: str
     sender_name: str
     created_at: str
+    resource_refs: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, str]:
         """输出稳定字段名，便于序列化到描述或外部存储。"""
@@ -101,6 +108,7 @@ class SourceReference:
             "messageId": self.message_id,
             "sender": self.sender_name,
             "createdAt": self.created_at,
+            "resourceRefs": list(self.resource_refs),
         }
 
 
