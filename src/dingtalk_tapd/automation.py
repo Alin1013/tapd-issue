@@ -135,7 +135,7 @@ class IssueAnalyzer:
         summary = self._summary(combined, bool(downloads))
         priority = self._priority(combined)
         media = _direct_media((*event.resource_refs, *(download.url or "" for download in downloads)))
-        description = self._description(event, downloads, ocr_text, combined)
+        description = self._description(event, downloads, ocr_text, combined, self.config.group_name)
         return IssueAnalysis(relevant, summary, priority, ocr_text, media, description)
 
     def _summary(self, combined: str, has_attachments: bool) -> str:
@@ -166,6 +166,7 @@ class IssueAnalyzer:
         downloads: tuple[ResourceDownload, ...],
         ocr_text: tuple[str, ...],
         combined: str,
+        group_name: str,
     ) -> str:
         """生成包含来源、OCR 和下载 ledger 的 Markdown，确保附件失败可见。"""
 
@@ -178,6 +179,7 @@ class IssueAnalyzer:
             [
                 "",
                 "## 来源",
+                f"- group：{group_name}",
                 f"- conversationId：`{event.conversation_id}`",
                 f"- messageId：`{event.message_id}`",
                 f"- sender：{event.sender_name}",
