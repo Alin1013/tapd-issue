@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dingtalk-tapd-bridge"
+version = "0.1.0"
+description = "将钉钉 DWS 问题消息整理为 TAPD 工单的安全编排工具"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+dingtalk-tapd = "dingtalk_tapd.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
