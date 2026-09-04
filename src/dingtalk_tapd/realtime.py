@@ -11,7 +11,8 @@ import threading
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from queue import Queue
+from typing import Any, Callable
 
 from .config import AutomationConfig, DwsConfig
 from .dws import DwsClient, DwsError
@@ -208,26 +209,63 @@ class RealtimeEventListener:
         """消费 NDJSON；单行格式错误只跳过该行，避免中断后续事件。"""
 
         self._start()
+        try:
+            yield from self._read_events()
+        finally:
+            self.stop()
+
+    def consume(self, callback: Callable[[RealtimeEvent], None]) -> None:
+        """在独立读取线程中持续排空 stdout，再由调用方顺序处理事件。"""
+
+        self._start()
+        queue: Queue[RealtimeEvent | None] = Queue()
+        errors: list[Exception] = []
+
+        def reader() -> None:
+            """把事件快速放入无界队列，避免 TAPD 网络请求造成 DWS 管道背压。"""
+
+            try:
+                for event in self._read_events():
+                    queue.put(event)
+            except Exception as exc:  # noqa: BLE001 - 主线程会重新抛出读取异常
+                errors.append(exc)
+            finally:
+                queue.put(None)
+
+        reader_thread = threading.Thread(target=reader, name="dws-stdout", daemon=True)
+        reader_thread.start()
+        try:
+            while True:
+                event = queue.get()
+                if event is None:
+                    if errors:
+                        raise RealtimeEventError("DWS 实时事件读取失败") from errors[0]
+                    return
+                callback(event)
+        finally:
+            self.stop()
+            reader_thread.join(timeout=1)
+
+    def _read_events(self) -> Iterator[RealtimeEvent]:
+        """读取已启动进程的 stdout；events/consume 共用同一解析逻辑。"""
+
         process = self._process
         if process is None or process.stdout is None:
             raise RealtimeEventError("DWS 实时监听没有 stdout")
-        try:
-            for line in process.stdout:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    payload = json.loads(stripped)
-                except json.JSONDecodeError:
-                    logger.warning("忽略无法解析的 DWS 事件行")
-                    continue
-                if not isinstance(payload, Mapping):
-                    continue
-                event = RealtimeEvent.from_payload(payload)
-                if event is not None:
-                    yield event
-        finally:
-            self.stop()
+        for line in process.stdout:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                logger.warning("忽略无法解析的 DWS 事件行")
+                continue
+            if not isinstance(payload, Mapping):
+                continue
+            event = RealtimeEvent.from_payload(payload)
+            if event is not None:
+                yield event
 
     def stop(self) -> None:
         """优先用 stdin EOF/SIGTERM 触发 DWS 清理，不使用 SIGKILL 跳过订阅回收。"""

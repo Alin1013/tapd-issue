@@ -141,9 +141,12 @@ def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
         max_events=args.max_events,
     )
     try:
-        for event in listener.events():
-            # 每条事件单独输出，便于 launchd、日志采集或上层 Agent 增量消费。
+        def handle(event: Any) -> None:
+            """每条事件单独输出，便于 launchd、日志采集或上层 Agent 增量消费。"""
+
             _json_print(service.process(event).as_dict())
+
+        listener.consume(handle)
         return 0
     finally:
         listener.stop()
