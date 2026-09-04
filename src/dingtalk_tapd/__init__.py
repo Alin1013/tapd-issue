@@ -1,6 +1,6 @@
 """钉钉 DWS 到 TAPD 的领域模型、实时监听与编排组件。"""
 
-from .automation import AutoIssueService, AutomationOutcome, IssueAnalysis
+from .automation import AutoIssueService, AutomationOutcome, HistorySyncReport, IssueAnalysis
 from .config import AutomationConfig
 
 from .models import (
@@ -25,6 +25,7 @@ __all__ = [
     "AutomationConfig",
     "AutoIssueService",
     "AutomationOutcome",
+    "HistorySyncReport",
     "IssueAnalysis",
     "IssueDraft",
     "IssueType",

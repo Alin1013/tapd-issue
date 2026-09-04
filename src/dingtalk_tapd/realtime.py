@@ -1,10 +1,11 @@
-"""消费 DWS 实时 @我 事件，并补齐消息详情与本地资源下载。"""
+"""消费 DWS 实时群消息事件，并补齐消息详情与本地资源下载。"""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -16,8 +17,13 @@ from typing import Any, Callable
 
 from .config import AutomationConfig, DwsConfig
 from .dws import DwsClient, DwsError
+from .models import DingTalkMessage
 
 logger = logging.getLogger(__name__)
+
+AT_ME_EVENT_TYPE = "user_im_message_receive_at"
+GROUP_EVENT_TYPE = "user_im_message_receive_group"
+HISTORY_SYNC_EVENT_TYPE = "history-sync"
 
 
 def _redact_log_line(line: str) -> str:
@@ -64,6 +70,62 @@ class RealtimeEvent:
     created_at: str
     resource_refs: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    event_type: str = ""
+
+    @classmethod
+    def from_message(cls, message: DingTalkMessage) -> "RealtimeEvent":
+        """把历史同步得到的消息转换成与实时事件相同的自动建单输入。"""
+
+        # 历史消息没有事件 envelope；显式标记来源，便于描述和排障时区分两条入口。
+        return cls(
+            message_id=message.message_id,
+            conversation_id=message.conversation_id,
+            sender_name=message.sender_name,
+            content=message.text,
+            created_at=message.created_at,
+            resource_refs=message.resource_refs,
+            event_type=HISTORY_SYNC_EVENT_TYPE,
+            raw={"source": "history-sync"},
+        )
+
+    def mentions_any(self, names: Sequence[str], identifiers: Sequence[str] = ()) -> bool:
+        """判断正文或事件元数据是否 @ 了指定姓名/稳定 ID。"""
+
+        content = self.content or ""
+        candidates = tuple(
+            dict.fromkeys(
+                value.strip().lstrip("@")
+                for value in (*names, *identifiers)
+                if value.strip().lstrip("@")
+            )
+        )
+        for candidate in candidates:
+            # 只接受完整 @ token，避免 @董超杰 被误判成 @董超。
+            if re.search(rf"(?<!\S)@{re.escape(candidate)}(?![\u4e00-\u9fffA-Za-z0-9_])", content):
+                return True
+        for name in names:
+            normalized = name.strip().lstrip("@")
+            if normalized and re.search(
+                rf"<at\b[^>]*>\s*@?{re.escape(normalized)}\s*</at>",
+                content,
+                flags=re.IGNORECASE,
+            ):
+                return True
+        return _mention_metadata_matches(self.raw, candidates)
+
+    def is_automation_trigger(
+        self,
+        mention_targets: Sequence[str],
+        mention_target_ids: Sequence[str] = (),
+    ) -> bool:
+        """区分实时三类 @ 触发与历史同步的无 @ 主题扫描。"""
+
+        if self.event_type == HISTORY_SYNC_EVENT_TYPE:
+            return True
+        # 空 event_type 兼容旧版扁平事件，按原有 @当前用户订阅处理。
+        if self.event_type in {"", AT_ME_EVENT_TYPE}:
+            return True
+        return self.event_type == GROUP_EVENT_TYPE and self.mentions_any(mention_targets, mention_target_ids)
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RealtimeEvent | None":
@@ -86,7 +148,19 @@ class RealtimeEvent:
         content = _first_text(data, ("content", "text", "message_text", "messageText"))
         created_at = _first_text(data, ("create_time", "created_at", "createTime", "event_time", "timestamp"), "未知时间")
         refs = _resource_refs(data)
-        return cls(message_id, conversation_id, sender, content, created_at, refs, payload)
+        event_type = _first_text(payload, ("type", "event_type", "eventType")) or _first_text(
+            data, ("type", "event_type", "eventType")
+        )
+        return cls(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_name=sender,
+            content=content,
+            created_at=created_at,
+            resource_refs=refs,
+            event_type=event_type,
+            raw=payload,
+        )
 
 
 def _first_text(item: Mapping[str, Any], keys: Sequence[str], default: str = "") -> str:
@@ -121,6 +195,25 @@ def _resource_refs(item: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(refs)
 
 
+def _mention_metadata_matches(value: Any, candidates: Sequence[str], in_mention_field: bool = False) -> bool:
+    """兼容 DWS 版本把 @对象单独放在 atUsers/mentions 元数据中的返回。"""
+
+    candidate_set = set(candidates)
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            field_name = str(key).lower()
+            mention_field = in_mention_field or "mention" in field_name or field_name.startswith("at")
+            if mention_field and isinstance(nested, (str, int)):
+                normalized = str(nested).strip().lstrip("@")
+                if normalized in candidate_set or f"@{normalized}" in candidate_set:
+                    return True
+            if isinstance(nested, (Mapping, list)) and _mention_metadata_matches(nested, candidate_set, mention_field):
+                return True
+    elif isinstance(value, list):
+        return any(_mention_metadata_matches(item, candidate_set, in_mention_field) for item in value)
+    return False
+
+
 class RealtimeEventListener:
     """托管 DWS 长连接生命周期，并在 ready 后逐行产出消息事件。"""
 
@@ -143,21 +236,23 @@ class RealtimeEventListener:
         self._stop_requested = False
 
     def _command(self) -> list[str]:
-        """构造官方推荐的 @我 NDJSON 监听命令。"""
+        """构造同时订阅 @当前用户和目标群事件的 NDJSON 监听命令。"""
 
         args = [
             self.config.executable,
             "event",
-            "+listen-im",
-            "--kind",
-            "at-me",
+            "consume",
+            AT_ME_EVENT_TYPE,
+            GROUP_EVENT_TYPE,
+            "--group",
+            self.automation.group_id,
+            "--flatten",
             "--format",
             "ndjson",
         ]
         if self.duration:
             args.extend(["--duration", self.duration])
-        if self.max_events:
-            args.extend(["--max-events", str(self.max_events)])
+        # max-events 在本地按过滤后的唯一消息计数，避免群内无关消息耗尽预算。
         if self.config.profile:
             args.extend(["--profile", self.config.profile])
         return args
@@ -247,11 +342,13 @@ class RealtimeEventListener:
             reader_thread.join(timeout=1)
 
     def _read_events(self) -> Iterator[RealtimeEvent]:
-        """读取已启动进程的 stdout；events/consume 共用同一解析逻辑。"""
+        """读取并筛选事件；群订阅只放行 @ 指定对象的消息。"""
 
         process = self._process
         if process is None or process.stdout is None:
             raise RealtimeEventError("DWS 实时监听没有 stdout")
+        accepted = 0
+        seen: set[tuple[str, str]] = set()
         for line in process.stdout:
             stripped = line.strip()
             if not stripped:
@@ -264,8 +361,19 @@ class RealtimeEventListener:
             if not isinstance(payload, Mapping):
                 continue
             event = RealtimeEvent.from_payload(payload)
-            if event is not None:
-                yield event
+            if event is None or not event.is_automation_trigger(
+                self.automation.mention_targets,
+                self.automation.mention_target_ids,
+            ):
+                continue
+            event_key = (event.conversation_id, event.message_id)
+            if event_key in seen:
+                continue
+            seen.add(event_key)
+            yield event
+            accepted += 1
+            if self.max_events and accepted >= self.max_events:
+                return
 
     def stop(self) -> None:
         """优先用 stdin EOF/SIGTERM 触发 DWS 清理，不使用 SIGKILL 跳过订阅回收。"""

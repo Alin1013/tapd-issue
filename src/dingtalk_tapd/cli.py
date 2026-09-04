@@ -1,4 +1,4 @@
-"""提供历史检索、显式建单和实时 @我 自动建单命令。"""
+"""提供历史检索、显式建单、群监听和历史同步自动建单命令。"""
 
 from __future__ import annotations
 
@@ -53,9 +53,15 @@ def _build_parser() -> argparse.ArgumentParser:
     create.add_argument("--confirm", action="store_true", help="确认执行外部写入")
     create.add_argument("--allow-partial", action="store_true", help="允许使用 partial 检索结果建单")
 
-    listen = subparsers.add_parser("listen", help="监听 @我 并自动创建企业知识中心 TAPD Bug")
+    listen = subparsers.add_parser("listen", help="监听目标群消息并自动创建企业知识中心 TAPD Bug")
     listen.add_argument("--duration", help="监听时长，例如 10m；省略则持续运行")
     listen.add_argument("--max-events", type=int, default=0, help="收到指定数量事件后退出，0 表示不限")
+
+    sync = subparsers.add_parser("sync", help="同步目标群聊天记录并自动创建相关 TAPD Bug")
+    sync.add_argument("--start", help="ISO 8601 开始时间")
+    sync.add_argument("--end", help="ISO 8601 结束时间")
+    sync.add_argument("--order", choices=("asc", "desc"), default="desc")
+    sync.add_argument("--allow-partial", action="store_true", help="允许使用 partial 同步结果自动建单")
     return parser
 
 
@@ -153,6 +159,24 @@ def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
         service.close()
 
 
+def _sync(workflow: Workflow, args: argparse.Namespace) -> int:
+    """执行一次目标群历史同步；实时监听之外的无 @ 消息也走同一建单规则。"""
+
+    automation = AutomationConfig.from_env()
+    service = AutoIssueService(workflow, automation)
+    try:
+        report = service.sync_history(
+            start=args.start,
+            end=args.end,
+            order=args.order,
+            allow_partial=args.allow_partial,
+        )
+        _json_print(report.as_dict())
+        return 2 if report.blocked_reason else 0
+    finally:
+        service.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """运行 CLI，返回适合 shell 的退出码而不吞掉业务错误。"""
 
@@ -163,6 +187,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "listen":
             logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
             return _listen(workflow, args)
+        if args.command == "sync":
+            return _sync(workflow, args)
         if args.command == "search":
             result = workflow.search(args.group, args.keyword, start=args.start, end=args.end, order=args.order)
             _json_print(search_result_to_dict(result))

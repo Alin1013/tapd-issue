@@ -255,6 +255,20 @@ class Workflow:
         return "\n".join(lines)
 
 
+def pagination_ledger_to_dict(ledger: PaginationLedger) -> dict[str, Any]:
+    """统一序列化 DWS 分页账本，供检索与历史同步输出复用。"""
+
+    return {
+        "complete": ledger.complete,
+        "hasMore": ledger.has_more,
+        "nextCursor": ledger.next_cursor,
+        "nextPage": ledger.next_page,
+        "stopReason": ledger.stop_reason,
+        "failures": list(ledger.failures),
+        "isPartial": not ledger.is_complete,
+    }
+
+
 def search_result_to_dict(result: SearchResult) -> dict[str, Any]:
     """将只读检索结果序列化为 CLI/API 可消费的 JSON。"""
 
@@ -274,15 +288,7 @@ def search_result_to_dict(result: SearchResult) -> dict[str, Any]:
             }
             for message in result.messages
         ],
-        "integrity": {
-            "complete": result.ledger.complete,
-            "hasMore": result.ledger.has_more,
-            "nextCursor": result.ledger.next_cursor,
-            "nextPage": result.ledger.next_page,
-            "stopReason": result.ledger.stop_reason,
-            "failures": list(result.ledger.failures),
-            "isPartial": result.is_partial,
-        },
+        "integrity": pagination_ledger_to_dict(result.ledger),
     }
 
 

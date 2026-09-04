@@ -137,6 +137,16 @@ class DwsClient:
             raise GroupResolutionError(query, candidates)
         return candidates[0]
 
+    def _message_result(self, command_args: Sequence[str], group: DingTalkGroup) -> SearchResult:
+        """统一解析 DWS 消息列表与分页账本，确保搜索和同步遵循同一契约。"""
+
+        payload = self._run_json(command_args)
+        messages = tuple(
+            self._parse_message(item, group)
+            for item in self._items(payload, ("messages", "items", "data", "results"))
+        )
+        return SearchResult(group=group, messages=messages, ledger=self._parse_ledger(payload))
+
     def search_messages(
         self,
         group: DingTalkGroup,
@@ -166,10 +176,28 @@ class DwsClient:
             args.extend(["--start", start])
         if end:
             args.extend(["--end", end])
-        payload = self._run_json(args)
-        messages = tuple(self._parse_message(item, group) for item in self._items(payload, ("messages", "items", "data", "results")))
-        ledger = self._parse_ledger(payload)
-        return SearchResult(group=group, messages=messages, ledger=ledger)
+        return self._message_result(args, group)
+
+    def list_group_messages(
+        self,
+        group: DingTalkGroup,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        order: str = "desc",
+    ) -> SearchResult:
+        """读取指定群的聊天记录，供无 @ 的历史同步复用同一完整性账本。"""
+
+        if order not in {"asc", "desc"}:
+            raise ValueError("order 只能是 asc 或 desc")
+        if order == "asc" and not start:
+            raise ValueError("order=asc 时必须提供 --start")
+        args = ["+chat-messages", "--group", group.open_conversation_id, "--page-all", "--order", order]
+        if start:
+            args.extend(["--start", start])
+        if end:
+            args.extend(["--end", end])
+        return self._message_result(args, group)
 
     def get_messages(
         self,
@@ -200,7 +228,8 @@ class DwsClient:
         )
         sender_name = cls._first_text(item, ("senderName", "sender", "senderNick", "author"), "未知发送者")
         text = cls._first_text(item, ("text", "content", "body", "messageText"), "")
-        created_at = cls._first_text(item, ("createdAt", "created_at", "timestamp", "time"))
+        # DWS chat-messages 当前契约使用 createTime，旧版/兼容输出仍可能使用 createdAt。
+        created_at = cls._first_text(item, ("createdAt", "created_at", "createTime", "timestamp", "time"))
         refs = item.get("resourceRefs") or item.get("resource_refs") or ()
         if isinstance(refs, str):
             refs = (refs,)
@@ -209,7 +238,11 @@ class DwsClient:
             resource_refs = tuple(
                 ref
                 if isinstance(ref, str)
-                else cls._first_text(ref, ("url", "uri", "resourceRef", "id"), json.dumps(ref, ensure_ascii=False))
+                else cls._first_text(
+                    ref,
+                    ("url", "uri", "resourceRef", "resourceId", "resource_id", "id"),
+                    json.dumps(ref, ensure_ascii=False),
+                )
                 for ref in refs
                 if isinstance(ref, (str, Mapping))
             )

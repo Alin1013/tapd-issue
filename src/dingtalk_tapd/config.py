@@ -38,6 +38,8 @@ class AutomationConfig:
     attachment_dir: str = ".dingtalk-tapd/attachments"
     ready_timeout_seconds: float = 30.0
     ocr_command: str | None = None
+    mention_targets: tuple[str, ...] = ("董超", "买年顺")
+    mention_target_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "AutomationConfig":
@@ -54,6 +56,22 @@ class AutomationConfig:
         attachment_path = Path(attachment_dir)
         if attachment_path.is_absolute() or ".." in attachment_path.parts:
             raise ValueError("DINGTALK_TAPD_ATTACHMENT_DIR 必须是工作目录内的相对路径")
+        mention_targets = tuple(
+            dict.fromkeys(
+                name.strip().lstrip("@")
+                for name in os.getenv("DINGTALK_TAPD_MENTION_TARGETS", ",".join(defaults.mention_targets)).split(",")
+                if name.strip().lstrip("@")
+            )
+        )
+        if not mention_targets:
+            raise ValueError("DINGTALK_TAPD_MENTION_TARGETS 至少需要一个姓名")
+        mention_target_ids = tuple(
+            dict.fromkeys(
+                identifier.strip()
+                for identifier in os.getenv("DINGTALK_TAPD_MENTION_TARGET_IDS", "").split(",")
+                if identifier.strip()
+            )
+        )
         return cls(
             group_id=os.getenv("DINGTALK_TAPD_GROUP_ID", defaults.group_id).strip(),
             group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", defaults.group_name).strip(),
@@ -64,6 +82,8 @@ class AutomationConfig:
             attachment_dir=attachment_dir,
             ready_timeout_seconds=ready_timeout_seconds,
             ocr_command=os.getenv("DINGTALK_TAPD_OCR_COMMAND") or None,
+            mention_targets=mention_targets,
+            mention_target_ids=mention_target_ids,
         )
 
 

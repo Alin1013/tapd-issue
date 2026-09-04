@@ -1,6 +1,6 @@
 # Dingtalk TAPD Bridge
 
-这是一个围绕设计文档实现的 Python CLI，用于把钉钉 DWS 中的问题消息整理为 TAPD 缺陷、需求或任务。`search`、`draft`、`create` 仍保持读取和写入分层；`listen` 是用户 @当前用户后触发的受控自动写入入口，并把钉钉 `messageId`、会话 ID 和分页完整性保留在工单中。
+这是一个围绕设计文档实现的 Python CLI，用于把钉钉 DWS 中的问题消息整理为 TAPD 缺陷、需求或任务。`search`、`draft`、`create` 仍保持读取和写入分层；`listen` 监听目标群消息并自动写入，`sync` 用于补扫没有 @ 的历史聊天记录。两条自动入口都把钉钉 `messageId` 和会话 ID 写入工单来源；`sync` 另外在报告中保留分页完整性账本。
 
 ## 安装
 
@@ -29,7 +29,7 @@ export TAPD_API_PASSWORD=...
 dingtalk-tapd listen
 ```
 
-监听使用 `dws event +listen-im --kind at-me`，默认只接收已确认的 `DeepWorks 产品交流群`（`cid3SbKZNiotRpk9RdlluSUSA==`）中 @当前用户的消息，并只提交与企业知识中心、知识库或知识管理有关的内容。触发后程序会自动：
+监听使用 `dws event consume user_im_message_receive_at user_im_message_receive_group --group cid3SbKZNiotRpk9RdlluSUSA== --flatten --format ndjson`，同时接收当前用户的 @ 消息和目标群事件。实时群事件只放行 @董超或 @买年顺；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
 
 - 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；
@@ -45,7 +45,17 @@ dingtalk-tapd listen --duration 10m
 dingtalk-tapd listen --max-events 1
 ```
 
-高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
+需要补扫历史聊天记录时执行一次同步。可以用时间范围限制同步窗口；省略时沿用 DWS 最近消息默认范围：
+
+```bash
+dingtalk-tapd sync \
+  --start "2026-09-01T00:00:00+08:00" \
+  --end "2026-09-05T00:00:00+08:00"
+```
+
+同步结果为 partial 时默认只输出完整性告警、不自动写入；确认时间范围后可显式加 `--allow-partial`。
+
+高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`（逗号分隔，默认 `董超,买年顺`）、`DINGTALK_TAPD_MENTION_TARGET_IDS`（可选的 `userId/openDingTalkId`，逗号分隔）。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
 
 TAPD MCP 只有在工具契约声明支持时才接受图片/视频公网直链作为富媒体；旧版 MCP 会自动降级为把直链写入描述。钉钉下载到本地的文件不会被冒充成“已上传”，当前未实现把本地文件直接上传到 TAPD 的未验证接口。
 
@@ -89,6 +99,6 @@ dingtalk-tapd create \
 
 - 群名必须唯一解析，零命中或多候选不会自动选择。
 - DWS 分页缺少 `complete=true`、存在 `hasMore` 或 `failures` 时结果会标记为 partial。
-- 手动 `create` 没有 `--confirm` 时不会调用 TAPD 创建接口；`listen` 只在目标群收到用户 @当前用户事件后自动写入。
+- 手动 `create` 没有 `--confirm` 时不会调用 TAPD 创建接口；`listen` 和 `sync` 只在目标群消息被分析为企业知识中心相关内容后自动写入。
 - 令牌只从环境变量读取，不写入 JSON 输出、日志或仓库。
-- `listen` 的事件状态和去重键持久化在 `.dingtalk-tapd/state.sqlite3`；写入结果未知时标记为失败供人工排查，不自动重试。
+- `listen` 和 `sync` 的事件状态、去重键持久化在 `.dingtalk-tapd/state.sqlite3`；写入结果未知时标记为失败供人工排查，不自动重试。

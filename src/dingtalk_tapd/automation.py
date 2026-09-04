@@ -1,4 +1,4 @@
-"""把实时 @我 事件分析为企业知识中心 TAPD 缺陷并安全落账。"""
+"""把实时与历史群消息分析为企业知识中心 TAPD 缺陷并安全落账。"""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from .config import AutomationConfig
-from .models import DingTalkGroup, IssueDraft, IssueType, SourceReference
-from .orchestrator import Workflow
-from .realtime import RealtimeEvent, ResourceDownload, fetch_message_details
+from .models import DingTalkGroup, IssueDraft, IssueType, SearchResult, SourceReference
+from .orchestrator import Workflow, pagination_ledger_to_dict
+from .realtime import HISTORY_SYNC_EVENT_TYPE, RealtimeEvent, ResourceDownload, fetch_message_details
 from .store import EventStore
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ class AutomationOutcome:
     attachment_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
-        """输出给 listen 命令的单行 JSON。"""
+        """输出给实时监听或历史同步命令的 JSON 结果。"""
 
         return {
             "status": self.status,
@@ -61,6 +61,31 @@ class AutomationOutcome:
             "tapdUrl": self.tapd_url,
             "error": self.error,
             "attachmentCount": self.attachment_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySyncReport:
+    """保存同步消息、自动建单结果和 DWS 分页完整性，避免静默漏页。"""
+
+    result: SearchResult
+    outcomes: tuple[AutomationOutcome, ...]
+    blocked_reason: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """输出同步计数、逐消息结果和完整性账本。"""
+
+        statuses = {
+            status: sum(outcome.status == status for outcome in self.outcomes)
+            for status in ("created", "ignored", "duplicate", "failed")
+        }
+        return {
+            "messageCount": len(self.result.messages),
+            "processed": len(self.outcomes),
+            "counts": statuses,
+            "blockedReason": self.blocked_reason,
+            "integrity": pagination_ledger_to_dict(self.result.ledger),
+            "outcomes": [outcome.as_dict() for outcome in self.outcomes],
         }
 
 
@@ -129,8 +154,13 @@ class IssueAnalyzer:
         source_text = _clean_text(event.content)
         combined = "\n".join(part for part in (source_text, *ocr_text) if part)
         relevant = any(term in combined for term in self.relevant_terms)
-        # @我 且只有截图时无法从正文判断关键词，但用户已明确把附件作为问题提交。
-        if not source_text and downloads:
+        # 只有实时 @ 事件才允许“纯附件”直接提交；历史同步必须依赖正文/OCR 关键词。
+        if (
+            not source_text
+            and downloads
+            and event.event_type != HISTORY_SYNC_EVENT_TYPE
+            and event.is_automation_trigger(self.config.mention_targets, self.config.mention_target_ids)
+        ):
             relevant = True
         summary = self._summary(combined, bool(downloads))
         priority = self._priority(combined)
@@ -204,9 +234,15 @@ class IssueAnalyzer:
 
 
 def _clean_text(value: str) -> str:
-    """清理事件中的 @ 标记和重复空白，保留用户原始问题语义。"""
+    """清理事件中的富文本/纯文本 @ 标记和重复空白，保留问题语义。"""
 
     value = re.sub(r"<at[^>]*>.*?</at>", " ", value or "", flags=re.IGNORECASE)
+    # 兼容钉钉的 @姓名(姓名) 格式，只移除提及本身，保留紧随其后的问题正文。
+    value = re.sub(
+        r"(?<!\S)@[^\s@,，。！？!?；;：:()（）<>]+(?:\([^)]*\)|（[^）]*）)?",
+        " ",
+        value,
+    )
     return " ".join(value.split()).strip()
 
 
@@ -261,7 +297,7 @@ def _tapd_reference(value: Any) -> tuple[str | None, str | None]:
 
 
 class AutoIssueService:
-    """消费 @我 事件并自动创建 TAPD Bug，默认不需要用户填写字段。"""
+    """消费实时目标 @ 事件或历史同步消息并自动创建 TAPD Bug。"""
 
     def __init__(self, workflow: Workflow, config: AutomationConfig) -> None:
         self.workflow = workflow
@@ -275,16 +311,20 @@ class AutoIssueService:
         event_key = f"{event.conversation_id}:{event.message_id}"
         if event.conversation_id != self.config.group_id:
             return AutomationOutcome("ignored", event_key, event.message_id, error="非目标 DeepWorks 群")
+        if not event.is_automation_trigger(self.config.mention_targets, self.config.mention_target_ids):
+            return AutomationOutcome("ignored", event_key, event.message_id, error="未 @ 自动建单对象")
         if not self.store.claim(event_key):
             return AutomationOutcome("duplicate", event_key, event.message_id, error="事件已处理")
 
         downloads: tuple[ResourceDownload, ...] = ()
         detail_error: str | None = None
-        try:
-            _, downloads = fetch_message_details(self.workflow.dws, event, self.config)
-        except Exception as exc:  # noqa: BLE001 - 详情失败仍保留事件并交给分析/人工核对
-            detail_error = f"消息详情或附件下载失败：{exc}"
-            logger.warning(detail_error)
+        # 历史同步的纯文本消息没有可下载资源；跳过 messages-mget，避免全量同步放大 API 请求。
+        if event.event_type != HISTORY_SYNC_EVENT_TYPE or event.resource_refs:
+            try:
+                _, downloads = fetch_message_details(self.workflow.dws, event, self.config)
+            except Exception as exc:  # noqa: BLE001 - 详情失败仍保留事件并交给分析/人工核对
+                detail_error = f"消息详情或附件下载失败：{exc}"
+                logger.warning(detail_error)
 
         analysis = self.analyzer.analyze(event, downloads)
         if not analysis.relevant:
@@ -316,7 +356,7 @@ class AutoIssueService:
             },
         )
         try:
-            # 自动入口已经由用户 @ 触发；仍读取项目元数据/字段作为写前契约校验。
+            # 自动入口已由目标群和主题规则筛选；仍读取项目元数据/字段作为写前契约校验。
             self.workflow.confirmation_context(draft)
             response = self.workflow.create(draft, confirmed=True)
             tapd_id, tapd_url = _tapd_reference(response)
@@ -336,6 +376,28 @@ class AutoIssueService:
             error = str(exc)
             self.store.mark_failed(event_key, error)
             return AutomationOutcome("failed", event_key, event.message_id, title, error=error, attachment_count=len(downloads))
+
+    def sync_history(
+        self,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        order: str = "desc",
+        allow_partial: bool = False,
+    ) -> HistorySyncReport:
+        """扫描目标群历史消息；没有 @ 时仍按企业知识中心关键词自动建单。"""
+
+        group = DingTalkGroup(self.config.group_name, self.config.group_id)
+        result = self.workflow.dws.list_group_messages(group, start=start, end=end, order=order)
+        if result.is_partial and not allow_partial:
+            return HistorySyncReport(
+                result,
+                (),
+                "同步结果为 partial；请缩小时间范围或显式使用 --allow-partial",
+            )
+        # 同步与实时事件共享 process 和 EventStore，因此同一消息只会产生一个 TAPD 工单。
+        outcomes = tuple(self.process(RealtimeEvent.from_message(message)) for message in result.messages)
+        return HistorySyncReport(result, outcomes)
 
     def _verify(self, tapd_id: str | None) -> str | None:
         """写入后调用可用的 get_bug；无法提取 ID 时返回解释而不阻断已完成写入。"""
