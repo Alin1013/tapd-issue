@@ -171,6 +171,23 @@ class DwsClient:
         ledger = self._parse_ledger(payload)
         return SearchResult(group=group, messages=messages, ledger=ledger)
 
+    def get_messages(
+        self,
+        message_ids: Sequence[str],
+        *,
+        download_resources: bool = False,
+        output_dir: str = "./downloads",
+    ) -> Any:
+        """按稳定消息 ID 读取详情；下载资源与详情读取保持在同一次 DWS 调用中。"""
+
+        unique_ids = tuple(dict.fromkeys(message_id.strip() for message_id in message_ids if message_id.strip()))
+        if not 1 <= len(unique_ids) <= 50:
+            raise ValueError("消息 ID 数量必须在 1 到 50 之间")
+        args = ["+messages-mget", "--msg-ids", ",".join(unique_ids)]
+        if download_resources:
+            args.extend(["--download-resources", "--output-dir", output_dir])
+        return self._run_json(args)
+
     @classmethod
     def _parse_message(cls, item: Mapping[str, Any], group: DingTalkGroup) -> DingTalkMessage:
         """将 DWS 消息对象归一化，缺失消息 ID 时拒绝建立不可追溯草稿。"""

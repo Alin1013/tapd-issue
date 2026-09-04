@@ -25,6 +25,42 @@ class DwsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AutomationConfig:
+    """自动建单的业务默认值；环境变量只作为高级覆盖，不要求每次调用填写。"""
+
+    group_id: str = "cid3SbKZNiotRpk9RdlluSUSA=="
+    group_name: str = "DeepWorks 产品交流群"
+    workspace_id: str = "57379524"
+    owner: str = "雷艾琳"
+    title_prefix: str = "【用户反馈】"
+    state_db: str = ".dingtalk-tapd/state.sqlite3"
+    attachment_dir: str = ".dingtalk-tapd/attachments"
+    ready_timeout_seconds: float = 30.0
+    ocr_command: str | None = None
+
+    @classmethod
+    def from_env(cls) -> "AutomationConfig":
+        """读取自动流程覆盖项；默认值对应已确认的 DeepWorks/TAPD 目标。"""
+
+        ready_timeout = os.getenv("DINGTALK_TAPD_READY_TIMEOUT", "30")
+        try:
+            ready_timeout_seconds = max(1.0, float(ready_timeout))
+        except ValueError as exc:
+            raise ValueError("DINGTALK_TAPD_READY_TIMEOUT 必须是数字") from exc
+        return cls(
+            group_id=os.getenv("DINGTALK_TAPD_GROUP_ID", cls.group_id).strip(),
+            group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", cls.group_name).strip(),
+            workspace_id=os.getenv("DINGTALK_TAPD_WORKSPACE_ID", cls.workspace_id).strip(),
+            owner=os.getenv("DINGTALK_TAPD_OWNER", cls.owner).strip(),
+            title_prefix=os.getenv("DINGTALK_TAPD_TITLE_PREFIX", cls.title_prefix),
+            state_db=os.getenv("DINGTALK_TAPD_STATE_DB", cls.state_db).strip(),
+            attachment_dir=os.getenv("DINGTALK_TAPD_ATTACHMENT_DIR", cls.attachment_dir).strip(),
+            ready_timeout_seconds=ready_timeout_seconds,
+            ocr_command=os.getenv("DINGTALK_TAPD_OCR_COMMAND") or None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TapdConfig:
     """TAPD 连接配置；CLI 环境配置默认通过官方 MCP 工具通信。"""
 
