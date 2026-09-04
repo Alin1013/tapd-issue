@@ -38,7 +38,7 @@ class ResourceDownload:
     def succeeded(self) -> bool:
         """只有存在本地文件且没有错误时才视为下载成功。"""
 
-        return bool(self.local_path) and not self.error
+        return bool(self.local_path) and Path(self.local_path).is_file() and not self.error
 
 
 @dataclass(frozen=True, slots=True)

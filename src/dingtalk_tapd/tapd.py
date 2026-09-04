@@ -184,5 +184,11 @@ class TapdClient:
             title_key: draft.title,
             "description": draft.description,
         }
-        form.update(draft.fields)
+        # REST 表单不能直接编码 list/dict；媒体和自定义结构必须保持 JSON 语义。
+        form.update(
+            {
+                key: json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value
+                for key, value in draft.fields.items()
+            }
+        )
         return form
