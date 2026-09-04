@@ -21,7 +21,7 @@ export TAPD_API_PASSWORD=...
 
 可选环境变量：`DWS_EXECUTABLE`、`DWS_PROFILE`、`TAPD_BACKEND`（默认 `mcp`，可设为 `rest`）、`TAPD_MCP_COMMAND`、`TAPD_API_BASE_URL`、`TAPD_BASE_URL`。
 
-## @我 自动建单
+## 自动建单
 
 已完成 DWS 设备登录后，可以启动常驻监听：
 
