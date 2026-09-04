@@ -9,6 +9,9 @@ from .models import (
     SearchResult,
     SourceReference,
 )
+from .orchestrator import ConfirmationRequired, Workflow
+from .dws import DwsClient, DwsError, GroupResolutionError
+from .tapd import TapdApiError, TapdClient, TapdError
 
 __all__ = [
     "DingTalkGroup",
@@ -18,4 +21,12 @@ __all__ = [
     "PaginationLedger",
     "SearchResult",
     "SourceReference",
+    "ConfirmationRequired",
+    "Workflow",
+    "DwsClient",
+    "DwsError",
+    "GroupResolutionError",
+    "TapdClient",
+    "TapdError",
+    "TapdApiError",
 ]
