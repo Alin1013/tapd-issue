@@ -101,7 +101,7 @@ class RealtimeEvent:
         )
         for candidate in candidates:
             # 只接受完整 @ token，避免 @董超杰 被误判成 @董超。
-            if re.search(rf"(?<!\S)@{re.escape(candidate)}(?![\u4e00-\u9fffA-Za-z0-9_])", content):
+            if re.search(rf"(?<![\u4e00-\u9fffA-Za-z0-9_])@{re.escape(candidate)}(?![\u4e00-\u9fffA-Za-z0-9_])", content):
                 return True
         for name in names:
             normalized = name.strip().lstrip("@")
