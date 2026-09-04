@@ -130,6 +130,8 @@ def _json_print(value: Any) -> None:
 def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
     """运行实时自动建单；业务默认值从 AutomationConfig 读取而不是命令行重复填写。"""
 
+    if args.max_events < 0:
+        raise ValueError("--max-events 不能为负数")
     automation = AutomationConfig.from_env()
     service = AutoIssueService(workflow, automation)
     listener = RealtimeEventListener(

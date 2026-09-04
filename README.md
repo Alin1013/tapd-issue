@@ -21,6 +21,36 @@ export TAPD_API_PASSWORD=...
 
 可选环境变量：`DWS_EXECUTABLE`、`DWS_PROFILE`、`TAPD_BACKEND`（默认 `mcp`，可设为 `rest`）、`TAPD_MCP_COMMAND`、`TAPD_API_BASE_URL`、`TAPD_BASE_URL`。
 
+## @我 自动建单
+
+已完成 DWS 设备登录后，可以启动常驻监听：
+
+```bash
+dingtalk-tapd listen
+```
+
+监听使用 `dws event +listen-im --kind at-me`，默认只接收已确认的 `DeepWorks 产品交流群`（`cid3SbKZNiotRpk9RdlluSUSA==`）中 @当前用户的消息，并只提交与企业知识中心、知识库或知识管理有关的内容。触发后程序会自动：
+
+- 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
+- 根据影响词设置优先级（明确紧急/P0 为 `urgent`，一般故障默认 `high`）；
+- 生成 `【用户反馈】问题摘要-YYYYMMDD-HHMMSS` 标题；
+- 用 `+messages-mget --download-resources` 下载截图/附件，在描述中保留本地路径、资源 ID、消息 ID 和下载失败原因；
+- 对本地图片尝试使用系统 `tesseract` 做 OCR。没有中文语言包或视觉分析器时，会明确标注“原图待查看”，不会虚构截图内容；
+- 以 `conversationId:messageId` 写入 `.dingtalk-tapd/state.sqlite3`，同一消息只建一次工单。
+
+可用边界参数控制监听生命周期：
+
+```bash
+dingtalk-tapd listen --duration 10m
+dingtalk-tapd listen --max-events 1
+```
+
+高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
+
+TAPD MCP 只接受图片/视频公网直链作为富媒体。钉钉下载到本地的文件不会被冒充成“已上传”；若消息本身带有 HTTP(S) 直链，程序才会将其以内嵌媒体交给 TAPD。当前未实现把本地文件直接上传到 TAPD 的未验证接口。
+
+该监听默认以当前用户 OAuth 身份运行，不需要创建机器人。若改为企业机器人 Stream，需要额外的开放平台应用、发布审批和入群配置，不能由本项目自动猜测或代办。
+
 只有在明确设置 `TAPD_BACKEND=rest` 时才使用内置 REST 兼容客户端；生产环境建议使用 MCP 后端，以复用设计文档中列出的官方工具契约。
 
 ## 使用

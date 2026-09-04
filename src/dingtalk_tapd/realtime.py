@@ -141,7 +141,6 @@ class RealtimeEventListener:
             "at-me",
             "--format",
             "ndjson",
-            "--flatten",
         ]
         if self.duration:
             args.extend(["--duration", self.duration])
