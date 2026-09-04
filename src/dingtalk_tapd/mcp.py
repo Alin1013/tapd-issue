@@ -183,9 +183,11 @@ class McpTapdClient:
     def get_entity_custom_fields(self, workspace_id: str, entity_type: IssueType) -> Any:
         """按文档约定传递实体类型，读取字段定义供确认与校验。"""
 
+        # TAPD 的缺陷字段接口使用复数 bugs，领域枚举仍保留 bug 以匹配 CLI 对外契约。
+        api_entity_type = "bugs" if entity_type is IssueType.BUG else entity_type.value
         return self._call_tool(
             "get_entity_custom_fields",
-            {"workspace_id": workspace_id, "entity_type": entity_type.value},
+            {"workspace_id": workspace_id, "entity_type": api_entity_type},
         )
 
     def create_bug(self, draft: IssueDraft) -> Any:
