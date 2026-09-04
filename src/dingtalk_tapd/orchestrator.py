@@ -112,7 +112,20 @@ class Workflow:
     def validate_custom_fields(definition: Any, fields: Mapping[str, Any]) -> None:
         """依据已读取的字段配置拒绝未知自定义字段，避免把别名猜测传给 TAPD。"""
 
-        basic = {"owner", "priority", "severity", "description", "title", "name"}
+        # media/image/video 是官方 MCP 的描述扩展，不应被误判为 TAPD 自定义字段。
+        basic = {
+            "owner",
+            "priority",
+            "severity",
+            "description",
+            "title",
+            "name",
+            "media",
+            "image_url",
+            "image_urls",
+            "video_url",
+            "video_urls",
+        }
         requested = {str(key) for key in fields if str(key) not in basic}
         if not requested:
             return

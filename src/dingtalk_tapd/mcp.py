@@ -245,11 +245,22 @@ class McpTapdClient:
     def _options(draft: IssueDraft) -> dict[str, Any]:
         """将基础字段和 custom_fields 分层，匹配 MCP options 契约。"""
 
-        basic_keys = {"owner", "priority", "severity"}
+        # 富媒体字段必须保持在 options 顶层，官方服务会将其渲染到描述中。
+        basic_keys = {
+            "owner",
+            "priority",
+            "severity",
+            "media",
+            "image_url",
+            "image_urls",
+            "video_url",
+            "video_urls",
+        }
         options: dict[str, Any] = {"description": draft.description}
         # TAPD MCP 的缺陷字段名与项目 CLI 的友好参数名不同，这里集中完成映射。
         field_aliases = {"owner": "current_owner", "priority": "priority_label", "severity": "severity"}
-        options.update({field_aliases[key]: value for key, value in draft.fields.items() if key in basic_keys})
+        options.update({field_aliases[key]: value for key, value in draft.fields.items() if key in field_aliases})
+        options.update({key: value for key, value in draft.fields.items() if key in basic_keys and key not in field_aliases})
         custom_fields = {key: value for key, value in draft.fields.items() if key not in basic_keys}
         if custom_fields:
             options["custom_fields"] = custom_fields

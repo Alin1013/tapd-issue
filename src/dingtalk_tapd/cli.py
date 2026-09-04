@@ -1,14 +1,16 @@
-"""提供 search、draft、create 三个安全分层的命令行入口。"""
+"""提供历史检索、显式建单和实时 @我 自动建单命令。"""
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from collections.abc import Sequence
 from typing import Any
 
-from .config import DwsConfig, TapdConfig
+from .config import AutomationConfig, DwsConfig, TapdConfig
+from .automation import AutoIssueService
 from .dws import DwsClient, DwsError
 from .models import IssueDraft, IssueType, SearchResult
 from .orchestrator import (
@@ -18,6 +20,7 @@ from .orchestrator import (
     search_result_to_dict,
 )
 from .mcp import McpTapdClient
+from .realtime import RealtimeEventError, RealtimeEventListener
 from .tapd import TapdClient, TapdError
 
 
@@ -49,6 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_draft_arguments(create)
     create.add_argument("--confirm", action="store_true", help="确认执行外部写入")
     create.add_argument("--allow-partial", action="store_true", help="允许使用 partial 检索结果建单")
+
+    listen = subparsers.add_parser("listen", help="监听 @我 并自动创建企业知识中心 TAPD Bug")
+    listen.add_argument("--duration", help="监听时长，例如 10m；省略则持续运行")
+    listen.add_argument("--max-events", type=int, default=0, help="收到指定数量事件后退出，0 表示不限")
     return parser
 
 
@@ -120,6 +127,27 @@ def _json_print(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
+    """运行实时自动建单；业务默认值从 AutomationConfig 读取而不是命令行重复填写。"""
+
+    automation = AutomationConfig.from_env()
+    service = AutoIssueService(workflow, automation)
+    listener = RealtimeEventListener(
+        DwsConfig.from_env(),
+        automation,
+        duration=args.duration,
+        max_events=args.max_events,
+    )
+    try:
+        for event in listener.events():
+            # 每条事件单独输出，便于 launchd、日志采集或上层 Agent 增量消费。
+            _json_print(service.process(event).as_dict())
+        return 0
+    finally:
+        listener.stop()
+        service.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """运行 CLI，返回适合 shell 的退出码而不吞掉业务错误。"""
 
@@ -127,6 +155,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     workflow: Workflow | None = None
     try:
         workflow = _workflow()
+        if args.command == "listen":
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+            return _listen(workflow, args)
         if args.command == "search":
             result = workflow.search(args.group, args.keyword, start=args.start, end=args.end, order=args.order)
             _json_print(search_result_to_dict(result))
@@ -154,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         response = workflow.create(draft, confirmed=True)
         _json_print({"created": True, "response": response, "draft": issue_draft_to_dict(draft)})
         return 0
-    except (DwsError, TapdError, ConfirmationRequired, ValueError) as exc:
+    except (DwsError, TapdError, ConfirmationRequired, RealtimeEventError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
     finally:

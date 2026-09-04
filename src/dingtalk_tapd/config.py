@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,19 +43,25 @@ class AutomationConfig:
     def from_env(cls) -> "AutomationConfig":
         """读取自动流程覆盖项；默认值对应已确认的 DeepWorks/TAPD 目标。"""
 
+        defaults = cls()
         ready_timeout = os.getenv("DINGTALK_TAPD_READY_TIMEOUT", "30")
         try:
             ready_timeout_seconds = max(1.0, float(ready_timeout))
         except ValueError as exc:
             raise ValueError("DINGTALK_TAPD_READY_TIMEOUT 必须是数字") from exc
+        attachment_dir = os.getenv("DINGTALK_TAPD_ATTACHMENT_DIR", defaults.attachment_dir).strip()
+        # DWS 明确禁止绝对路径和 .. 逃逸，提前校验可避免监听到事件后才失败。
+        attachment_path = Path(attachment_dir)
+        if attachment_path.is_absolute() or ".." in attachment_path.parts:
+            raise ValueError("DINGTALK_TAPD_ATTACHMENT_DIR 必须是工作目录内的相对路径")
         return cls(
-            group_id=os.getenv("DINGTALK_TAPD_GROUP_ID", cls.group_id).strip(),
-            group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", cls.group_name).strip(),
-            workspace_id=os.getenv("DINGTALK_TAPD_WORKSPACE_ID", cls.workspace_id).strip(),
-            owner=os.getenv("DINGTALK_TAPD_OWNER", cls.owner).strip(),
-            title_prefix=os.getenv("DINGTALK_TAPD_TITLE_PREFIX", cls.title_prefix),
-            state_db=os.getenv("DINGTALK_TAPD_STATE_DB", cls.state_db).strip(),
-            attachment_dir=os.getenv("DINGTALK_TAPD_ATTACHMENT_DIR", cls.attachment_dir).strip(),
+            group_id=os.getenv("DINGTALK_TAPD_GROUP_ID", defaults.group_id).strip(),
+            group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", defaults.group_name).strip(),
+            workspace_id=os.getenv("DINGTALK_TAPD_WORKSPACE_ID", defaults.workspace_id).strip(),
+            owner=os.getenv("DINGTALK_TAPD_OWNER", defaults.owner).strip(),
+            title_prefix=os.getenv("DINGTALK_TAPD_TITLE_PREFIX", defaults.title_prefix),
+            state_db=os.getenv("DINGTALK_TAPD_STATE_DB", defaults.state_db).strip(),
+            attachment_dir=attachment_dir,
             ready_timeout_seconds=ready_timeout_seconds,
             ocr_command=os.getenv("DINGTALK_TAPD_OCR_COMMAND") or None,
         )
