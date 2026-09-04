@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Mapping
@@ -31,11 +32,16 @@ class McpTapdClient:
         if self._process is not None:
             return
         try:
+            # 官方服务在仅配置令牌时会因缺少 API 基地址递归初始化；显式注入默认值避免启动失败。
+            child_env = os.environ.copy()
+            child_env.setdefault("TAPD_API_BASE_URL", self.config.api_base_url)
+            child_env.setdefault("TAPD_BASE_URL", self.config.base_url)
             self._process = subprocess.Popen(
                 list(self.config.mcp_command),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
+                env=child_env,
             )
         except OSError as exc:
             raise McpTapdError(f"无法启动 TAPD MCP Server: {' '.join(self.config.mcp_command)}") from exc
@@ -126,6 +132,12 @@ class McpTapdClient:
             raise McpTapdError(f"TAPD MCP 工具 {name} 返回业务错误")
         structured = result.get("structuredContent")
         if structured is not None:
+            # 官方服务的 structuredContent 在部分版本会再包一层 JSON 字符串。
+            if isinstance(structured, Mapping) and isinstance(structured.get("result"), str):
+                try:
+                    return json.loads(structured["result"])
+                except json.JSONDecodeError:
+                    return structured["result"]
             return structured
         content = result.get("content")
         if isinstance(content, list):
@@ -160,7 +172,8 @@ class McpTapdClient:
     def get_user_participant_projects(self, user_name: str) -> Any:
         """调用 MCP 项目参与查询工具。"""
 
-        return self._call_tool("get_user_participant_projects", {"user_name": user_name})
+        # 官方工具参数名是 nick；适配器对外仍保留 user_name 语义，避免 CLI 接口变化。
+        return self._call_tool("get_user_participant_projects", {"nick": user_name})
 
     def get_workspace_info(self, workspace_id: str) -> Any:
         """调用 MCP workspace 元数据工具。"""
@@ -213,14 +226,17 @@ class McpTapdClient:
     def get_bug(self, workspace_id: str, bug_id: str) -> Any:
         """调用 MCP 缺陷查询工具。"""
 
-        return self._call_tool("get_bug", {"workspace_id": workspace_id, "bug_id": bug_id})
+        return self._call_tool("get_bug", {"workspace_id": workspace_id, "options": {"id": bug_id}})
 
     def get_stories_or_tasks(self, workspace_id: str, entity_type: IssueType, entity_id: str) -> Any:
         """调用 MCP 需求/任务查询工具。"""
 
         return self._call_tool(
             "get_stories_or_tasks",
-            {"workspace_id": workspace_id, "entity_type": entity_type.value, "entity_id": entity_id},
+            {
+                "workspace_id": workspace_id,
+                "options": {"entity_type": entity_type.value, "id": entity_id},
+            },
         )
 
     @staticmethod
@@ -229,7 +245,9 @@ class McpTapdClient:
 
         basic_keys = {"owner", "priority", "severity"}
         options: dict[str, Any] = {"description": draft.description}
-        options.update({key: value for key, value in draft.fields.items() if key in basic_keys})
+        # TAPD MCP 的缺陷字段名与项目 CLI 的友好参数名不同，这里集中完成映射。
+        field_aliases = {"owner": "current_owner", "priority": "priority_label", "severity": "severity"}
+        options.update({field_aliases[key]: value for key, value in draft.fields.items() if key in basic_keys})
         custom_fields = {key: value for key, value in draft.fields.items() if key not in basic_keys}
         if custom_fields:
             options["custom_fields"] = custom_fields
