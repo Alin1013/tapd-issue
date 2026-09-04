@@ -71,18 +71,29 @@ class DwsClient:
     def _items(payload: Any, keys: Sequence[str]) -> list[Mapping[str, Any]]:
         """兼容 DWS 不同版本的列表包装字段，同时拒绝非对象条目。"""
 
-        if isinstance(payload, list):
-            raw_items = payload
-        elif isinstance(payload, Mapping):
-            raw_items = None
+        current = payload
+        raw_items: list[Any] | None = None
+        # 部分版本会返回 {data: {messages: [...]}}，最多展开两层以防异常递归。
+        for _ in range(3):
+            if isinstance(current, list):
+                raw_items = current
+                break
+            if not isinstance(current, Mapping):
+                break
             for key in keys:
-                value = payload.get(key)
+                value = current.get(key)
                 if isinstance(value, list):
                     raw_items = value
                     break
-            if raw_items is None:
-                raw_items = [payload]
-        else:
+            if raw_items is not None:
+                break
+            nested = current.get("data")
+            if isinstance(nested, Mapping):
+                current = nested
+                continue
+            raw_items = [current]
+            break
+        if raw_items is None:
             raise DwsError("DWS 返回的数据结构不是对象或数组")
         return [item for item in raw_items if isinstance(item, Mapping)]
 
@@ -184,7 +195,11 @@ class DwsClient:
 
         if not isinstance(payload, Mapping):
             return PaginationLedger(complete=False, stop_reason="invalid-payload")
-        failures_value = payload.get("failures") or ()
+        metadata = payload
+        nested = payload.get("pagination") or payload.get("meta")
+        if isinstance(nested, Mapping):
+            metadata = {**payload, **nested}
+        failures_value = metadata.get("failures") or ()
         if isinstance(failures_value, Sequence) and not isinstance(failures_value, str):
             failures = tuple(
                 item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
@@ -192,12 +207,12 @@ class DwsClient:
             )
         else:
             failures = (str(failures_value),) if failures_value else ()
-        next_page = payload.get("nextPage") or payload.get("next_page")
+        next_page = metadata.get("nextPage") or metadata.get("next_page")
         return PaginationLedger(
-            complete=payload.get("complete") is True,
-            has_more=payload.get("hasMore") is True or payload.get("has_more") is True,
-            next_cursor=payload.get("nextCursor") or payload.get("next_cursor"),
+            complete=metadata.get("complete") is True,
+            has_more=metadata.get("hasMore") is True or metadata.get("has_more") is True,
+            next_cursor=metadata.get("nextCursor") or metadata.get("next_cursor"),
             next_page=int(next_page) if isinstance(next_page, int) else None,
-            stop_reason=payload.get("stopReason") or payload.get("stop_reason"),
+            stop_reason=metadata.get("stopReason") or metadata.get("stop_reason"),
             failures=failures,
         )
