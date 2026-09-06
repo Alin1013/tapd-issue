@@ -111,6 +111,12 @@ node server.js
 | `TAPD_DEFAULT_TESTER` | 否 | `雷艾琳` | Node 自动模式统一写入的测试人 |
 | `TAPD_RESPONSIBILITY_WHITELIST` | 否 | 空 | Node 自动模式的模块/关键词责任人 JSON 规则 |
 | `TAPD_DEFAULT_PRIORITY_LABEL` | 否 | `中` | 表单未选择优先级时的默认值 |
+| `TAPD_DEFAULT_ITERATION` | 否 | `企业知识中心9月` | 自动建单默认迭代；仅在 TAPD 迭代候选中命中时写入 ID |
+| `TAPD_DEFAULT_VERSION_REPORT` | 否 | `v1.3.0` | 自动建单默认发现版本；仅在 TAPD 版本候选中命中时写入 |
+| `TAPD_DEFAULT_MODULE` | 否 | `企业知识中心` | 自动建单默认模块；仅在 TAPD 模块候选中命中时写入 |
+| `TAPD_DEFAULT_TESTMODE` | 否 | `手工测试` | 自动建单默认测试方式 |
+| `TAPD_DEFAULT_ITERATION_BUG` | 否 | `是` | 自动建单默认“迭代需求缺陷”值 |
+| `TAPD_DEFAULT_SOURCE` | 否 | 空 | 缺陷根源默认值；留空时由模型按 TAPD 候选判断 |
 | `TAPD_BUG_URL_TEMPLATE` | 否 | `https://www.tapd.cn/{workspace_id}/bugtrace/bugs/view?bug_id={id}` | 创建成功后的链接模板，必须保留两个占位符 |
 
 认证优先级是 `TAPD_ACCESS_TOKEN`，其次是 `TAPD_CLIENT_ID`/`TAPD_CLIENT_SECRET`，最后才是 `TAPD_API_USER`/`TAPD_API_PASSWORD`。OAuth token 过期时，服务会用应用凭据刷新一次。

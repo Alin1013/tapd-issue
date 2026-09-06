@@ -1425,7 +1425,7 @@ function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
   const optionalFields = [
     'module', 'feature', 'version_report', 'version_test', 'version_fix', 'version_close',
     'platform', 'os', 'testmode', 'testphase', 'testtype', 'source', 'bugtype', 'frequency',
-    'current_owner', 'reporter', 'participator', 'te', 'de', 'cc', 'iteration_id', 'release_id',
+    'current_owner', 'reporter', 'participator', 'te', 'de', 'cc', 'iteration_id', 'iteration_bug', 'release_id',
     'label', 'deadline', 'begin', 'due', 'estimate', 'effort', 'template_id'
   ];
   for (const field of optionalFields) {
@@ -1709,7 +1709,7 @@ async function getTapdOptions(workspaceId, config) {
   const warnings = [];
   try {
     const releases = await getTapdJson(
-      `${config.tapdApiBaseUrl}/releases?workspace_id=${queryWorkspace}&limit=200&page=1&fields=id,name,workspace_id,status`,
+      `${config.tapdApiBaseUrl}/releases?workspace_id=${queryWorkspace}&limit=200&page=1&fields=id,name,workspace_id,status,release_date,release_time,publish_time,start_date,end_date,finish_date,created,created_at`,
       config
     );
     releasePlans = extractReleases(releases);

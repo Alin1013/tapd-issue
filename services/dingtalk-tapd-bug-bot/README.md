@@ -122,6 +122,8 @@ Authorization: Bearer ACCESS_TOKEN
 - Bug Agent 模式下，单聊直接发送图片/视频即可触发分析；默认由服务端自动创建 Bug，无需确认相关字段。
 - 视频会由服务器抽取最多 4 帧发送给视觉模型，原视频仍会保留为草稿中的链接。
 - “模块”“发现版本”“迭代”“发布计划”从 TAPD `/bugs/get_fields_info`、`/iterations` 和 `/releases` 动态加载，并将选择值分别写入 `module`、`version_report`、`iteration_id`、`release_id`。
+- 自动建单默认迭代为 `企业知识中心9月`、发现版本为 `v1.3.0`、模块为 `企业知识中心`、测试方式为 `手工测试`、迭代需求缺陷为“是”；默认值只有命中 TAPD 候选列表时才写入，发布计划按发布时间等日期字段倒序并默认选择最新一条。
+- 优先级、严重程度、缺陷根源、测试方式和迭代需求缺陷均优先读取 TAPD 字段配置候选，再由模型按问题内容选择合法值；缺陷根源可通过 `TAPD_DEFAULT_SOURCE` 设置兜底值。
 - “处理人”从 TAPD `/workspaces/users` 动态加载，界面显示姓名和账号，提交时写入 TAPD 需要的 `current_owner` 用户名。
 - “处理人”支持输入姓名/账号并从下拉候选中选择；服务端使用钉钉 `msgId` 在短时间窗口内去重，避免重复回复卡片。
 - 自动模式按 AI 解析出的模块、标题和描述匹配 `TAPD_RESPONSIBILITY_WHITELIST`，并将处理人/开发人解析为 TAPD 项目成员账号；未命中时使用 `TAPD_DEFAULT_OWNER` 和 `TAPD_DEFAULT_DEVELOPER`。当前所有自动建单的测试人统一为 `TAPD_DEFAULT_TESTER`（默认 `雷艾琳`）。
