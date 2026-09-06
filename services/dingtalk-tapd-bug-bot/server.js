@@ -1290,6 +1290,28 @@ function enqueueAgentMedia(request, body, config) {
   }, 1500);
 }
 
+function enqueueAgentText(request, body, config) {
+  // 纯文字消息也进入同一批处理器，复用字段读取、模型分析、白名单和自动建单逻辑。
+  const sourceText = extractDingTalkMessageText(body);
+  if (!sourceText) return;
+  const key = agentContextKey(body);
+  const batch = agentBatches.get(key) || {
+    body,
+    request,
+    sourceText: '',
+    publicBaseUrl: buildPublicBase(request, config),
+    items: [],
+    timer: null
+  };
+  batch.sourceText = [batch.sourceText, sourceText].filter(Boolean).join('\n').slice(0, 8000);
+  agentBatches.set(key, batch);
+  if (batch.timer) clearTimeout(batch.timer);
+  batch.timer = setTimeout(async () => {
+    agentBatches.delete(key);
+    await processAgentBatch(batch, config);
+  }, 1500);
+}
+
 async function handleConfirmDraft(request, response, config, draftId) {
   let input;
   try {
@@ -2600,10 +2622,13 @@ async function handleDingTalkCallback(request, response, config) {
   }
   cleanupPendingSessions();
   if (isDuplicateCallback(body.msgId)) return sendJson(response, 200, {});
-  // 用户可能先 @机器人发送问题描述、再单独发送截图；把短期文字交给下一条媒体批次。
+  // 用户可以只发文字直接建单；若随后发送媒体，文字仍会短暂保留供媒体批次合并。
   const callbackText = extractDingTalkMessageText(body);
   if (config.enableBugAgent && callbackText && !isMediaMessage(body)) {
-    rememberAgentTextContext(body, callbackText);
+    enqueueAgentText(request, body, config);
+    return sendJson(response, 200, buildDingTalkMarkdown('Bug Agent 已收到描述', [
+      '正在分析文字描述并自动创建 TAPD Bug。'
+    ]));
   }
   if (config.enableBugAgent && isMediaMessage(body)) {
     if (!extractDingTalkMediaItems(body).length) {
@@ -2625,8 +2650,8 @@ async function handleDingTalkCallback(request, response, config) {
   const formUrl = buildFormUrl(request, config, state);
   const card = config.enableBugAgent
     ? buildDingTalkMarkdown('Bug Agent', [
-      isBugCommand ? '请直接发送一张截图或一个视频，我会先生成 Bug 草稿。' : '请发送一张截图或一个视频开始分析。',
-      '确认并修改草稿后，才会创建 TAPD Bug。'
+      isBugCommand ? '请发送问题描述、截图或视频开始分析。' : '请发送问题描述、截图或视频开始分析。',
+      '分析完成后会按自动建单规则创建 TAPD Bug。'
     ])
     : (isBugCommand
       ? buildDingTalkActionCard(formUrl, config.tapdWorkspaceId)

@@ -53,8 +53,24 @@ class AgentEventForwarder:
         except Exception as exc:  # noqa: BLE001 - 转发失败需让监听日志和上层重试可见
             detail_error = f"消息媒体下载失败：{exc}"
         if not downloads and not event.resource_refs and event.content.strip():
-            self._remember_text(event)
-            return {"status": "context_saved", "messageId": event.message_id, "reason": "等待同一会话的截图或视频"}
+            # 纯文字描述本身就是完整建单输入，立即转发；远端会在没有媒体时直接调用模型分析。
+            source_text = "\n".join(filter(None, (self._consume_text(event), event.content.strip())))
+            payload = {
+                "eventId": f"{event.conversation_id}:{event.message_id}",
+                "messageId": event.message_id,
+                "conversationId": event.conversation_id,
+                "senderStaffId": event.sender_identifier(),
+                "senderName": event.sender_name,
+                "conversationType": event.conversation_type(),
+                "sessionWebhook": event.session_webhook(),
+                "createdAt": event.created_at,
+                "text": event.content,
+                "sourceText": source_text,
+                "resourceRefs": [],
+                "media": [],
+                "warnings": [],
+            }
+            return self._post(payload)
         if event.resource_refs and not downloads:
             return {
                 "status": "failed",
