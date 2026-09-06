@@ -113,6 +113,48 @@ class RealtimeEvent:
                 return True
         return _mention_metadata_matches(self.raw, candidates)
 
+    def sender_identifier(self) -> str:
+        """提取可用于互动卡片私投的发送者 ID；缺失时返回空字符串。"""
+
+        candidates = (
+            "senderStaffId",
+            "sender_staff_id",
+            "senderId",
+            "sender_id",
+            "senderUserId",
+            "sender_user_id",
+            "fromStaffId",
+            "from_staff_id",
+        )
+        found = _first_text(self.raw, candidates)
+        nested = self.raw.get("payload") if isinstance(self.raw.get("payload"), Mapping) else None
+        if not found and nested is not None:
+            found = _first_text(nested, candidates)
+        if found:
+            return found
+        sender = self.raw.get("sender")
+        if not isinstance(sender, Mapping) and nested is not None:
+            sender = nested.get("sender")
+        if isinstance(sender, Mapping):
+            return _first_text(sender, ("staffId", "staff_id", "userId", "user_id", "openId", "open_id"))
+        return ""
+
+    def conversation_type(self) -> str:
+        """提取会话类型，供远端群通知选择正确的钉钉发送 API。"""
+
+        candidates = ("conversationType", "conversation_type", "chatType", "chat_type")
+        value = _first_text(self.raw, candidates)
+        nested = self.raw.get("payload") if isinstance(self.raw.get("payload"), Mapping) else None
+        return value or (_first_text(nested, candidates) if nested is not None else "")
+
+    def session_webhook(self) -> str:
+        """保留原生机器人回调提供的临时 webhook，转发链路可直接回群通知。"""
+
+        candidates = ("sessionWebhook", "session_webhook", "webhook")
+        value = _first_text(self.raw, candidates)
+        nested = self.raw.get("payload") if isinstance(self.raw.get("payload"), Mapping) else None
+        return value or (_first_text(nested, candidates) if nested is not None else "")
+
     def is_automation_trigger(
         self,
         mention_targets: Sequence[str],
@@ -224,11 +266,18 @@ class RealtimeEventListener:
         *,
         duration: str | None = None,
         max_events: int = 0,
+        mention_targets: Sequence[str] | None = None,
+        mention_target_ids: Sequence[str] | None = None,
+        include_at_me: bool = True,
     ) -> None:
         self.config = config
         self.automation = automation
         self.duration = duration
         self.max_events = max_events
+        # 监听器允许调用方覆盖 @目标；Bug Agent 因此可以只接收 @缺陷机器人。
+        self.mention_targets = tuple(mention_targets) if mention_targets is not None else automation.mention_targets
+        self.mention_target_ids = tuple(mention_target_ids) if mention_target_ids is not None else automation.mention_target_ids
+        self.include_at_me = include_at_me
         self._process: subprocess.Popen[str] | None = None
         self._ready = threading.Event()
         self._stderr_done = threading.Event()
@@ -242,14 +291,18 @@ class RealtimeEventListener:
             self.config.executable,
             "event",
             "consume",
-            AT_ME_EVENT_TYPE,
+        ]
+        # 远端 Agent 只需要目标群事件；普通 listen 保留当前用户 @ 事件兼容旧流程。
+        if self.include_at_me:
+            args.append(AT_ME_EVENT_TYPE)
+        args.extend([
             GROUP_EVENT_TYPE,
             "--group",
             self.automation.group_id,
             "--flatten",
             "--format",
             "ndjson",
-        ]
+        ])
         if self.duration:
             args.extend(["--duration", self.duration])
         # max-events 在本地按过滤后的唯一消息计数，避免群内无关消息耗尽预算。
@@ -362,8 +415,8 @@ class RealtimeEventListener:
                 continue
             event = RealtimeEvent.from_payload(payload)
             if event is None or not event.is_automation_trigger(
-                self.automation.mention_targets,
-                self.automation.mention_target_ids,
+                self.mention_targets,
+                self.mention_target_ids,
             ):
                 continue
             event_key = (event.conversation_id, event.message_id)

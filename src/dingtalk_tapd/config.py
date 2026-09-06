@@ -6,6 +6,7 @@ import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,33 @@ class DwsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentConfig:
+    """远端 Bug Agent 桥接配置；密钥只在进程内用于请求签名。"""
+
+    events_url: str
+    secret: str
+    timeout_seconds: float = 30.0
+
+    @classmethod
+    def from_env(cls) -> "AgentConfig":
+        """读取公网桥接地址和共享密钥，未配置时明确阻止启动。"""
+
+        url = os.getenv("DINGTALK_TAPD_AGENT_EVENTS_URL", "").strip()
+        secret = os.getenv("DINGTALK_TAPD_AGENT_SECRET", "")
+        if not url or not secret:
+            raise ValueError("agent-listen 需要配置 DINGTALK_TAPD_AGENT_EVENTS_URL 和 DINGTALK_TAPD_AGENT_SECRET")
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("DINGTALK_TAPD_AGENT_EVENTS_URL 必须是 HTTP(S) URL")
+        raw_timeout = os.getenv("DINGTALK_TAPD_AGENT_TIMEOUT", "30")
+        try:
+            timeout_seconds = max(1.0, float(raw_timeout))
+        except ValueError as exc:
+            raise ValueError("DINGTALK_TAPD_AGENT_TIMEOUT 必须是数字") from exc
+        return cls(url, secret, timeout_seconds)
+
+
+@dataclass(frozen=True, slots=True)
 class AutomationConfig:
     """自动建单的业务默认值；环境变量只作为高级覆盖，不要求每次调用填写。"""
 
@@ -40,6 +68,9 @@ class AutomationConfig:
     ocr_command: str | None = None
     mention_targets: tuple[str, ...] = ("董超", "买年顺")
     mention_target_ids: tuple[str, ...] = ()
+    # Bug Agent 单独使用机器人目标，避免迁移到群监听时误触发旧的人工 @ 规则。
+    bot_mention_targets: tuple[str, ...] = ("缺陷机器人",)
+    bot_mention_target_ids: tuple[str, ...] = ("6908187742", "DniS1GUKiiOoKA8NZrodrswyn6j1bSmGDQZ")
 
     @classmethod
     def from_env(cls) -> "AutomationConfig":
@@ -72,6 +103,26 @@ class AutomationConfig:
                 if identifier.strip()
             )
         )
+        bot_mention_targets = tuple(
+            dict.fromkeys(
+                name.strip().lstrip("@")
+                for name in os.getenv(
+                    "DINGTALK_TAPD_BOT_MENTION_TARGETS", ",".join(defaults.bot_mention_targets)
+                ).split(",")
+                if name.strip().lstrip("@")
+            )
+        )
+        if not bot_mention_targets:
+            raise ValueError("DINGTALK_TAPD_BOT_MENTION_TARGETS 至少需要一个姓名")
+        bot_mention_target_ids = tuple(
+            dict.fromkeys(
+                identifier.strip()
+                for identifier in os.getenv(
+                    "DINGTALK_TAPD_BOT_MENTION_TARGET_IDS", ",".join(defaults.bot_mention_target_ids)
+                ).split(",")
+                if identifier.strip()
+            )
+        )
         return cls(
             group_id=os.getenv("DINGTALK_TAPD_GROUP_ID", defaults.group_id).strip(),
             group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", defaults.group_name).strip(),
@@ -84,6 +135,8 @@ class AutomationConfig:
             ocr_command=os.getenv("DINGTALK_TAPD_OCR_COMMAND") or None,
             mention_targets=mention_targets,
             mention_target_ids=mention_target_ids,
+            bot_mention_targets=bot_mention_targets,
+            bot_mention_target_ids=bot_mention_target_ids,
         )
 
 

@@ -29,7 +29,7 @@ export TAPD_API_PASSWORD=...
 dingtalk-tapd listen
 ```
 
-监听使用 `dws event consume user_im_message_receive_at user_im_message_receive_group --group cid3SbKZNiotRpk9RdlluSUSA== --flatten --format ndjson`，同时接收当前用户的 @ 消息和目标群事件。实时群事件只放行 @董超或 @买年顺；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
+监听使用 `dws event consume user_im_message_receive_at user_im_message_receive_group --group cid3SbKZNiotRpk9RdlluSUSA== --flatten --format ndjson`，同时接收当前用户的 @ 消息和目标群事件。实时群事件只放行配置中的 @ 目标；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
 
 - 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；
@@ -66,13 +66,41 @@ dingtalk-tapd sync \
 
 同步结果为 partial 时默认只输出完整性告警、不自动写入；确认时间范围后可显式加 `--allow-partial`。
 
-高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`（逗号分隔，默认 `董超,买年顺`）、`DINGTALK_TAPD_MENTION_TARGET_IDS`（可选的 `userId/openDingTalkId`，逗号分隔）。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
+高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`、`DINGTALK_TAPD_MENTION_TARGET_IDS`、`DINGTALK_TAPD_BOT_MENTION_TARGETS`（默认 `缺陷机器人`）、`DINGTALK_TAPD_BOT_MENTION_TARGET_IDS`（默认使用缺陷机器人的稳定 ID）。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
 
 TAPD MCP 只有在工具契约声明支持时才接受图片/视频公网直链作为富媒体；旧版 MCP 会自动降级为把直链写入描述。钉钉下载到本地的文件不会被冒充成“已上传”，当前未实现把本地文件直接上传到 TAPD 的未验证接口。
 
 该监听默认以当前用户 OAuth 身份运行，不需要创建机器人。若改为企业机器人 Stream，需要额外的开放平台应用、发布审批和入群配置，不能由本项目自动猜测或代办。
 
 只有在明确设置 `TAPD_BACKEND=rest` 时才使用内置 REST 兼容客户端；生产环境建议使用 MCP 后端，以复用设计文档中列出的官方工具契约。
+
+### 连接远端 Bug Agent
+
+如果 TAPD/GPT/互动卡片服务运行在独立服务器（例如 `10.201.0.151` 的
+`dingtalk-tapd-bug-bot.service`），可以让本地 DWS 监听器把目标群事件交给该服务：
+
+```bash
+export DINGTALK_TAPD_AGENT_EVENTS_URL="https://<公网域名>/api/agent/events"
+export DINGTALK_TAPD_AGENT_SECRET="与远端 AGENT_INGEST_SECRET 相同的随机字符串"
+dingtalk-tapd agent-listen --max-events 1
+```
+
+`agent-listen` 只负责监听、下载并签名转发消息；远端服务继续执行 GPT-5.6-sol 分析、
+互动卡片字段编辑和 TAPD Bug 创建。媒体以受限 data URI 转发，不会把本地路径或 TAPD
+凭据发送到监听器以外的地方。远端返回 `duplicate` 时表示同一
+`conversationId:messageId` 已经处理，不会重复提单。
+
+远端服务需配置 `AGENT_INGEST_SECRET`，并把钉钉机器人加入目标群、配置 `/dingtalk/callback`
+回调；卡片确认仍由 `/dingtalk/card-callback` 处理。`agent-listen` 只订阅目标群并放行
+`@缺陷机器人`，互动卡片统一私投给 `DINGTALK_CARD_REVIEW_RECIPIENT_ID`（当前为雷艾琳），不会私投给提问人。若没有 `senderStaffId`，服务仍可投卡，但群内 @ 提问人的成功通知需要改用原生回调补齐稳定 ID。
+
+监听器的高级配置：`DINGTALK_TAPD_AGENT_TIMEOUT`（默认 30 秒）。公网地址和共享密钥只放
+在 systemd/环境变量中，不要写进 Git 或 README 实例值。
+
+服务器 `10.201.0.151:/opt/dingtalk-tapd-bug-bot` 的可部署源代码已同步到
+`services/dingtalk-tapd-bug-bot/`，并补上了上述 `/api/agent/events` 桥接端点。同步内容包含
+当前 `server.js`、Node 测试、配置脚本、环境变量模板和互动卡片模板；真实 `.env`、部署备份、
+`server.js.bak-*` 以及 macOS `._*` 元数据被刻意排除，避免凭据和历史运行产物进入 Git。
 
 ## 使用
 

@@ -9,7 +9,8 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
-from .config import AutomationConfig, DwsConfig, TapdConfig
+from .agent import AgentBridgeError, AgentEventForwarder
+from .config import AgentConfig, AutomationConfig, DwsConfig, TapdConfig
 from .automation import AutoIssueService
 from .dws import DwsClient, DwsError
 from .models import IssueDraft, IssueType, SearchResult
@@ -56,6 +57,13 @@ def _build_parser() -> argparse.ArgumentParser:
     listen = subparsers.add_parser("listen", help="监听目标群消息并自动创建企业知识中心 TAPD Bug")
     listen.add_argument("--duration", help="监听时长，例如 10m；省略则持续运行")
     listen.add_argument("--max-events", type=int, default=0, help="收到指定数量事件后退出，0 表示不限")
+
+    agent_listen = subparsers.add_parser(
+        "agent-listen",
+        help="监听目标群消息并转发到远端 GPT/TAPD Bug Agent",
+    )
+    agent_listen.add_argument("--duration", help="监听时长，例如 10m；省略则持续运行")
+    agent_listen.add_argument("--max-events", type=int, default=0, help="收到指定数量事件后退出，0 表示不限")
 
     sync = subparsers.add_parser("sync", help="同步目标群聊天记录并自动创建相关 TAPD Bug")
     sync.add_argument("--start", help="ISO 8601 开始时间")
@@ -164,6 +172,40 @@ def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
         service.close()
 
 
+def _agent_listen(args: argparse.Namespace) -> int:
+    """监听 DWS 目标群并把消息/媒体交给远端 Agent，由远端完成卡片和 TAPD 写入。"""
+
+    if args.max_events < 0:
+        raise ValueError("--max-events 不能为负数")
+    automation = AutomationConfig.from_env()
+    agent = AgentConfig.from_env()
+    dws = DwsClient(DwsConfig.from_env())
+    forwarder = AgentEventForwarder(dws, agent, automation)
+    listener = RealtimeEventListener(
+        DwsConfig.from_env(),
+        automation,
+        duration=args.duration,
+        max_events=args.max_events,
+        mention_targets=automation.bot_mention_targets,
+        mention_target_ids=automation.bot_mention_target_ids,
+        include_at_me=False,
+    )
+    try:
+        def handle(event: Any) -> None:
+            """每个事件独立转发并输出结果，便于 systemd 日志审计和故障重试。"""
+
+            _json_print(forwarder.process(event))
+
+        listener.consume(handle)
+        return 0
+    finally:
+        listener.stop()
+        # DwsClient 目前由短命 CLI 进程持有，保留兼容未来增加连接池的关闭钩子。
+        close = getattr(dws, "close", None)
+        if callable(close):
+            close()
+
+
 def _sync(workflow: Workflow, args: argparse.Namespace) -> int:
     """执行一次目标群历史同步；实时监听之外的无 @ 消息也走同一建单规则。"""
 
@@ -189,6 +231,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     workflow: Workflow | None = None
     try:
+        if args.command == "agent-listen":
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+            return _agent_listen(args)
         workflow = _workflow()
         if args.command == "listen":
             logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -222,7 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         response = workflow.create(draft, confirmed=True)
         _json_print({"created": True, "response": response, "draft": issue_draft_to_dict(draft)})
         return 0
-    except (DwsError, TapdError, ConfirmationRequired, RealtimeEventError, ValueError) as exc:
+    except (AgentBridgeError, DwsError, TapdError, ConfirmationRequired, RealtimeEventError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
     finally:

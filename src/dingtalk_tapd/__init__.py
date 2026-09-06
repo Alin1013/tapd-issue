@@ -1,7 +1,8 @@
 """钉钉 DWS 到 TAPD 的领域模型、实时监听与编排组件。"""
 
 from .automation import AutoIssueService, AutomationOutcome, HistorySyncReport, IssueAnalysis
-from .config import AutomationConfig
+from .agent import AgentBridgeError, AgentEventForwarder
+from .config import AgentConfig, AutomationConfig
 
 from .models import (
     DingTalkGroup,
@@ -23,6 +24,9 @@ __all__ = [
     "DingTalkGroup",
     "DingTalkMessage",
     "AutomationConfig",
+    "AgentConfig",
+    "AgentBridgeError",
+    "AgentEventForwarder",
     "AutoIssueService",
     "AutomationOutcome",
     "HistorySyncReport",

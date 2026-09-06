@@ -22,6 +22,7 @@ const CALLBACK_DEDUPE_TTL_MS = 5 * 60 * 1000;
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 const AGENT_EVENT_TIMESTAMP_TTL_MS = 5 * 60 * 1000;
 const AGENT_EVENT_DEDUPE_TTL_MS = 30 * 60 * 1000;
+const AGENT_TEXT_CONTEXT_TTL_MS = 2 * 60 * 1000;
 const execFileAsync = promisify(execFile);
 
 const MEDIA_TYPES = new Map([
@@ -39,6 +40,8 @@ const recentCallbackIds = new Map();
 const recentAgentEventIds = new Map();
 const bugDrafts = new Map();
 const agentBatches = new Map();
+// 暂存同一提问人在短时间内发送的文字上下文，下一条截图/视频会合并使用。
+const agentTextContexts = new Map();
 const cardUpdateQueues = new Map();
 let dingTalkTokenCache = { token: '', expiresAt: 0 };
 let tapdTokenCache = { token: '', expiresAt: 0 };
@@ -69,10 +72,12 @@ function getConfig() {
     cardTemplateId: process.env.DINGTALK_CARD_TEMPLATE_ID || '',
     cardCallbackRouteKey: process.env.DINGTALK_CARD_CALLBACK_ROUTE_KEY || '',
     cardCallbackSecret: process.env.DINGTALK_CARD_CALLBACK_SECRET || '',
+    // 当前阶段所有字段编辑卡片统一私投给雷艾琳，避免把 TAPD 配置暴露在群内。
+    cardReviewRecipientId: process.env.DINGTALK_CARD_REVIEW_RECIPIENT_ID || '641447065',
     agentIngestSecret: process.env.AGENT_INGEST_SECRET || '',
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
-    openaiModel: process.env.OPENAI_MODEL || 'gpt-5.6',
+    openaiModel: process.env.OPENAI_MODEL || 'gpt-5.6-sol',
     openaiApiMode: String(process.env.OPENAI_API_MODE || 'auto').toLowerCase(),
     openaiTimeoutMs: Number(process.env.OPENAI_TIMEOUT_MS || 90000),
     enableBugAgent: String(process.env.ENABLE_BUG_AGENT || '').toLowerCase() !== 'false',
@@ -227,6 +232,48 @@ function extractDingTalkMediaItems(body) {
       .map((item) => ({ downloadCode: item.downloadCode, name: item.fileName || 'pasted-image', kind: item.type || 'picture' }));
   }
   return [];
+}
+
+function extractDingTalkMessageText(body) {
+  // 富文本消息把文字和图片放在同一个数组里，统一抽取文字供模型理解上下文。
+  const values = [body?.text?.content, body?.content?.text, body?.content?.content];
+  if (Array.isArray(body?.content?.richText)) {
+    values.push(...body.content.richText.map((item) => item?.text || item?.content));
+  }
+  return values
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim())
+    .join('\n')
+    .slice(0, 8000);
+}
+
+function agentContextKey(body) {
+  return `${body?.senderStaffId || body?.senderId || 'unknown'}:${body?.conversationId || 'unknown'}`;
+}
+
+function cleanupAgentTextContexts(now = Date.now()) {
+  for (const [key, context] of agentTextContexts) {
+    if (context.expiresAt < now) agentTextContexts.delete(key);
+  }
+}
+
+function rememberAgentTextContext(body, text, now = Date.now()) {
+  const normalized = String(text || '').trim();
+  if (!normalized) return;
+  cleanupAgentTextContexts(now);
+  agentTextContexts.set(agentContextKey(body), {
+    text: normalized,
+    expiresAt: now + AGENT_TEXT_CONTEXT_TTL_MS
+  });
+}
+
+function consumeAgentTextContext(body, now = Date.now()) {
+  cleanupAgentTextContexts(now);
+  const key = agentContextKey(body);
+  const context = agentTextContexts.get(key);
+  if (!context) return '';
+  agentTextContexts.delete(key);
+  return context.text;
 }
 
 async function getDingTalkAccessToken(config) {
@@ -599,7 +646,8 @@ function getAgentStatus(config) {
       configured: cardTemplateConfigured(config),
       templateConfigured: Boolean(config.cardTemplateId),
       callbackRouteConfigured: Boolean(config.cardCallbackRouteKey),
-      callbackSecretConfigured: Boolean(config.cardCallbackSecret)
+      callbackSecretConfigured: Boolean(config.cardCallbackSecret),
+      reviewRecipientConfigured: Boolean(config.cardReviewRecipientId)
     },
     ingest: {
       // 只返回是否配置，不回显共享密钥，便于健康检查安全展示。
@@ -682,7 +730,7 @@ async function createConfirmedDraft(draft, config) {
   const attachments = await uploadTapdAttachments(draft.media || [], payload.workspace_id, result.id, config);
   draft.attachments = attachments.uploaded;
   draft.attachmentFailures = attachments.failures;
-  return { id: result.id, url: draft.bugUrl, attachments };
+  return { id: result.id, url: draft.bugUrl, attachments, payload };
 }
 
 async function processAgentBatch(batch, config) {
@@ -706,14 +754,16 @@ async function processAgentBatch(batch, config) {
       releasePlans: options.release_plans.length,
       users: options.users.length
     }));
-    const rawDraft = await analyzeBugWithOpenAI(savedMedia, options, config);
+    const rawDraft = await analyzeBugWithOpenAI(savedMedia, options, config, batch.sourceText || '');
     console.log('[agent] model draft received');
     const normalized = normalizeAgentDraft(rawDraft, options, savedMedia);
     const draftId = createBugDraft({
       ...normalized,
       options,
       senderStaffId: batch.body.senderStaffId || batch.body.senderId || '',
+      senderName: String(batch.body.senderName || batch.body.senderNick || '提问人'),
       conversationId: batch.body.conversationId || '',
+      conversationType: String(batch.body.conversationType || batch.body.conversation_type || ''),
       sessionWebhook: batch.body.sessionWebhook || '',
       workspaceId: String(config.tapdWorkspaceId || ''),
       expiresAt: Date.now() + DRAFT_TTL_MS
@@ -751,14 +801,16 @@ async function processForwardedAgentEvent(request, body, config) {
   try {
     savedMedia = await saveMedia(body.media || [], request, config);
     const options = await getTapdOptions(config.tapdWorkspaceId, config);
-    const rawDraft = await analyzeBugWithOpenAI(savedMedia, options, config, body.text || '');
+    const rawDraft = await analyzeBugWithOpenAI(savedMedia, options, config, body.sourceText || body.text || '');
     const normalized = normalizeAgentDraft(rawDraft, options, savedMedia);
     const draftId = createBugDraft({
       ...normalized,
       options,
       senderStaffId: String(body.senderStaffId || ''),
+      senderName: String(body.senderName || body.senderNick || '提问人'),
       conversationId: String(body.conversationId || ''),
-      sessionWebhook: '',
+      conversationType: String(body.conversationType || body.conversation_type || ''),
+      sessionWebhook: String(body.sessionWebhook || body.session_webhook || ''),
       workspaceId: String(config.tapdWorkspaceId || ''),
       sourceEventId: String(body.eventId || ''),
       expiresAt: Date.now() + DRAFT_TTL_MS
@@ -1016,7 +1068,7 @@ async function handleCardCallback(request, response, config) {
       status_detail: '正在写入 TAPD，请稍候。'
     }) } };
     void createConfirmedDraft(draft, config)
-      .then(async ({ id, url, attachments }) => {
+      .then(async ({ id, url, attachments, payload }) => {
         const attachmentDetail = attachmentStatusText(attachments, draft.media?.length || 0);
         try {
           await updateInteractiveCard(draft.cardOutTrackId, buildInteractiveCardParams(draft, {
@@ -1030,6 +1082,12 @@ async function handleCardCallback(request, response, config) {
         } catch (error) {
           // TAPD 已经建单成功，卡片刷新失败不能把成功结果误报为“创建失败”。
           console.error('[card] success update failed:', error.message);
+        }
+        try {
+          await notifyBugCreated(draft, { id }, payload, attachments, url, config);
+        } catch (error) {
+          // TAPD 已创建，群通知失败只记录告警，避免用户重复确认造成重复工单。
+          console.error('[card] success notification failed:', error.message);
         }
       })
       .catch(async (error) => {
@@ -1079,17 +1137,23 @@ async function handleCardCallback(request, response, config) {
 }
 
 function enqueueAgentMedia(request, body, config) {
-  const key = `${body.senderStaffId || body.senderId || 'unknown'}:${body.conversationId || 'unknown'}`;
+  const key = agentContextKey(body);
   let batch = agentBatches.get(key);
   if (!batch) {
     batch = {
       body,
       request,
+      // 同一条富文本消息或前一条文字消息提供的上下文，随媒体批次交给模型。
+      sourceText: consumeAgentTextContext(body),
       publicBaseUrl: buildPublicBase(request, config),
       items: [],
       timer: null
     };
     agentBatches.set(key, batch);
+  }
+  const currentText = extractDingTalkMessageText(body);
+  if (currentText) {
+    batch.sourceText = [batch.sourceText, currentText].filter(Boolean).join('\n').slice(0, 8000);
   }
   batch.items.push(...extractDingTalkMediaItems(body).slice(0, MAX_MEDIA_FILES - batch.items.length));
   if (batch.timer) clearTimeout(batch.timer);
@@ -1136,19 +1200,10 @@ async function handleConfirmDraft(request, response, config, draftId) {
     const attachments = await uploadTapdAttachments(draft.media || [], payload.workspace_id, result.id, config);
     draft.attachments = attachments.uploaded;
     draft.attachmentFailures = attachments.failures;
-    const attachmentDetail = attachmentStatusText(attachments, draft.media?.length || 0);
-    if (draft.sessionWebhook) {
-      try {
-        await sendDingTalkMessage(draft.sessionWebhook, buildDingTalkMarkdown('TAPD Bug 创建成功', [
-          `- Bug ID：**${result.id}**`,
-          `- 标题：${payload.title}`,
-          `- ${attachmentDetail}`,
-          ...attachments.failures.map((failure) => `- 附件失败：${failure.name}（${failure.error}）`),
-          `- [打开 TAPD 缺陷](${bugUrl})`
-        ]));
-      } catch (error) {
-        console.error('[agent] result reply failed:', error.message);
-      }
+    try {
+      await notifyBugCreated(draft, result, payload, attachments, bugUrl, config);
+    } catch (error) {
+      console.error('[agent] result notification failed:', error.message);
     }
     return sendJson(response, 200, {
       ok: true,
@@ -1568,6 +1623,55 @@ async function sendDingTalkMessage(sessionWebhook, payload) {
   return response;
 }
 
+function buildBugCreatedNotification(result, payload, attachments, bugUrl, mediaCount = 0, senderName = '') {
+  /** 统一成功通知正文，webhook 与群消息 OpenAPI 共用同一份文案。 */
+  const attachmentDetail = attachmentStatusText(attachments, mediaCount);
+  const mention = senderName ? `@${String(senderName).replaceAll('\n', ' ')} ` : '';
+  return [
+    `${mention}当前问题已记录，后续结果持续跟踪同步`,
+    `- Bug ID：**${result.id}**`,
+    `- 标题：${payload.title}`,
+    `- ${attachmentDetail}`,
+    ...(attachments?.failures || []).map((failure) => `- 附件失败：${failure.name}（${failure.error}）`),
+    `- [打开 TAPD 缺陷](${bugUrl})`
+  ].join('\n');
+}
+
+async function notifyBugCreated(draft, result, payload, attachments, bugUrl, config) {
+  // 草稿状态可能因重复回调再次进入成功分支；时间戳作为进程内通知幂等标记。
+  if (draft.notificationSentAt) return { sent: false, duplicate: true };
+  const text = buildBugCreatedNotification(
+    result,
+    payload,
+    attachments,
+    bugUrl,
+    draft.media?.length || 0,
+    draft.senderName
+  );
+  const webhookPayload = buildDingTalkMarkdown('TAPD Bug 创建成功', text.split('\n'));
+  if (draft.senderStaffId) {
+    webhookPayload.at = { atUserIds: [String(draft.senderStaffId)], isAtAll: false };
+  }
+  if (draft.sessionWebhook) {
+    await sendDingTalkMessage(draft.sessionWebhook, webhookPayload);
+    draft.notificationSentAt = Date.now();
+    return { sent: true, channel: 'sessionWebhook' };
+  }
+  if (!draft.conversationId) return { sent: false, reason: '缺少 conversationId' };
+  if (!config.dingTalkRobotCode) return { sent: false, reason: '缺少 DINGTALK_ROBOT_CODE' };
+  // 转发事件没有临时 sessionWebhook 时，通过机器人群消息 API 回群，并带上提问人 ID。
+  await dingTalkApiRequest('/v1.0/robot/groupMessages/send', 'POST', {
+    robotCode: config.dingTalkRobotCode,
+    openConversationId: draft.conversationId,
+    msgKey: 'sampleMarkdown',
+    msgParam: JSON.stringify({ title: 'TAPD Bug 创建成功', text }),
+    atUserIds: draft.senderStaffId ? [String(draft.senderStaffId)] : [],
+    userIdType: 1
+  }, config);
+  draft.notificationSentAt = Date.now();
+  return { sent: true, channel: 'groupMessages' };
+}
+
 async function dingTalkApiRequest(pathname, method, body, config) {
   const token = await getDingTalkAccessToken(config);
   const attempts = Number.isInteger(config.dingTalkApiRetryAttempts)
@@ -1757,7 +1861,8 @@ function buildInteractiveDraftParams(draft) {
 
 async function createAndDeliverInteractiveDraft(draft, config) {
   if (!cardTemplateConfigured(config)) return null;
-  const recipient = draft.senderStaffId;
+  // getConfig 默认使用雷艾琳；测试/嵌入调用若显式传入提问人则保持向后兼容。
+  const recipient = String(config.cardReviewRecipientId || draft.senderStaffId || '').trim();
   if (!recipient) throw new Error('缺少钉钉用户 ID，无法投放互动卡片');
   const outTrackId = `tapd-bug-draft-${draft.id}`.slice(0, 100);
   console.log('[agent] creating interactive card', JSON.stringify({
@@ -2230,6 +2335,11 @@ async function handleDingTalkCallback(request, response, config) {
   }
   cleanupPendingSessions();
   if (isDuplicateCallback(body.msgId)) return sendJson(response, 200, {});
+  // 用户可能先 @机器人发送问题描述、再单独发送截图；把短期文字交给下一条媒体批次。
+  const callbackText = extractDingTalkMessageText(body);
+  if (config.enableBugAgent && callbackText && !isMediaMessage(body)) {
+    rememberAgentTextContext(body, callbackText);
+  }
   if (config.enableBugAgent && isMediaMessage(body)) {
     if (!extractDingTalkMediaItems(body).length) {
       return sendJson(response, 200, buildDingTalkMarkdown('Bug Agent', ['没有识别到可分析的图片或视频。']));
@@ -2278,20 +2388,15 @@ async function handleCreateBug(request, response, config) {
     const result = await createTapdBug(payload, config);
     const bugUrl = buildTapdBugUrl(config, payload.workspace_id, result.id);
     const attachments = await uploadTapdAttachments(mediaLinks, payload.workspace_id, result.id, config);
-    const attachmentDetail = attachmentStatusText(attachments, mediaLinks.length);
     const session = statePayload ? pendingSessions.get(statePayload.id) : null;
-    if (session?.sessionWebhook) {
-      try {
-        await sendDingTalkMessage(session.sessionWebhook, buildDingTalkMarkdown('TAPD Bug 创建成功', [
-          `- Bug ID：**${result.id}**`,
-          `- 标题：${payload.title}`,
-          `- ${attachmentDetail}`,
-          ...attachments.failures.map((failure) => `- 附件失败：${failure.name}（${failure.error}）`),
-          `- [打开 TAPD 缺陷](${bugUrl})`
-        ]));
-      } catch (error) {
-        console.error('[dingtalk] result reply failed:', error.message);
-      }
+    try {
+      await notifyBugCreated({
+        sessionWebhook: session?.sessionWebhook || '',
+        conversationId: statePayload?.conversationId || '',
+        senderStaffId: statePayload?.senderStaffId || ''
+      }, result, payload, attachments, bugUrl, config);
+    } catch (error) {
+      console.error('[dingtalk] result notification failed:', error.message);
     }
     if (statePayload) pendingSessions.delete(statePayload.id);
     return sendJson(response, 200, {
