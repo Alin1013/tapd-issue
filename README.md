@@ -2,6 +2,11 @@
 
 这是一个围绕设计文档实现的 Python CLI，用于把钉钉 DWS 中的问题消息整理为 TAPD 缺陷、需求或任务。`search`、`draft`、`create` 仍保持读取和写入分层；`listen` 监听目标群消息并自动写入，`sync` 用于补扫没有 @ 的历史聊天记录。两条自动入口都把钉钉 `messageId` 和会话 ID 写入工单来源；`sync` 另外在报告中保留分页完整性账本。
 
+## 文档导航
+
+- [配置说明](docs/configuration.md)：环境变量、权限、数据生命周期和二次开发入口。
+- [操作手册](docs/operations.md)：安装验证、手工建单、自动监听、远端 Agent、systemd 运维和故障排查。
+
 ## 安装
 
 ```bash
@@ -85,13 +90,13 @@ export DINGTALK_TAPD_AGENT_SECRET="与远端 AGENT_INGEST_SECRET 相同的随机
 dingtalk-tapd agent-listen --max-events 1
 ```
 
-`agent-listen` 只负责监听、下载并签名转发消息；远端服务继续执行 GPT-5.6-sol 分析、
-互动卡片字段编辑和 TAPD Bug 创建。媒体以受限 data URI 转发，不会把本地路径或 TAPD
+`agent-listen` 只负责监听、下载并签名转发消息；远端服务继续执行 GPT-5.6-sol 分析、责任人
+白名单匹配和 TAPD Bug 创建。媒体以受限 data URI 转发，不会把本地路径或 TAPD
 凭据发送到监听器以外的地方。远端返回 `duplicate` 时表示同一
 `conversationId:messageId` 已经处理，不会重复提单。
 
 远端服务需配置 `AGENT_INGEST_SECRET`，并把钉钉机器人加入目标群、配置 `/dingtalk/callback`
-回调；卡片确认仍由 `/dingtalk/card-callback` 处理。`agent-listen` 只订阅目标群并放行
+回调；默认不需要卡片确认，成功结果会直接回群。设置 `TAPD_AUTO_CREATE_BUGS=false` 时，卡片确认仍由 `/dingtalk/card-callback` 处理。`agent-listen` 只订阅目标群并放行
 `@缺陷机器人`，互动卡片统一私投给 `DINGTALK_CARD_REVIEW_RECIPIENT_ID`（当前为雷艾琳），不会私投给提问人。若没有 `senderStaffId`，服务仍可投卡，但群内 @ 提问人的成功通知需要改用原生回调补齐稳定 ID。
 
 监听器的高级配置：`DINGTALK_TAPD_AGENT_TIMEOUT`（默认 30 秒）。公网地址和共享密钥只放

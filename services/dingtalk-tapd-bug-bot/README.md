@@ -3,7 +3,7 @@
 这是一个不依赖第三方 npm 包的 Node.js 最小服务，用于验证：
 
 ```text
-钉钉单聊发送截图/视频 -> Bug Agent 分析 -> 可编辑草稿 -> 人工确认 -> TAPD POST /bugs -> 钉钉回执
+钉钉单聊发送截图/视频 -> Bug Agent 分析 -> 自动选择责任人 -> TAPD POST /bugs -> 钉钉回执
 ```
 
 ## 1. 本地启动
@@ -54,7 +54,7 @@ https://你的公网HTTPS地址/dingtalk/callback
 - 识别 `新建Bug`、`创建Bug`、`建Bug` 等文本。
 - 使用机器人回调中的 `sessionWebhook` 回复 ActionCard。
 - ActionCard 打开同一服务的 `/` 表单页。
-- Bug Agent 模式下，单聊直接发送图片/视频即可开始分析；机器人会先通过 `sessionWebhook` 返回草稿卡片，点击草稿链接后才可以确认创建。
+- Bug Agent 模式下，单聊直接发送图片/视频即可开始分析；默认会直接创建 Bug 并通过 `sessionWebhook` 或群消息回执结果。
 
 钉钉必须能够从公网访问回调地址。开发阶段可以使用带 HTTPS 的公网隧道；生产环境建议部署到云函数、容器服务或一台有固定公网 HTTPS 域名的服务器。
 
@@ -94,7 +94,7 @@ Authorization: Bearer ACCESS_TOKEN
 | POST | `/dingtalk/callback` | 钉钉机器人回调 |
 | POST | `/api/agent/events` | 接收本地 DWS 监听器的 HMAC 签名事件 |
 | POST | `/api/bugs` | 校验表单并创建 TAPD Bug |
-| POST | `/api/drafts/{id}/confirm` | 人工确认后创建 TAPD Bug |
+| POST | `/api/drafts/{id}/confirm` | 兼容旧草稿模式，手工确认后创建 TAPD Bug |
 
 ### 本地 DWS 监听器桥接
 
@@ -104,9 +104,9 @@ Authorization: Bearer ACCESS_TOKEN
 十六进制值；时间戳超过 5 分钟的请求会被拒绝。事件使用 `eventId` 去重 30 分钟，媒体
 继续受单个 8MB、总计 12MB 和最多 5 个文件的限制。
 
-接口收到合法事件后立即返回 `202 accepted`，后台完成 TAPD 字段读取、GPT 草稿和互动卡片
-投递。它不会绕过人工确认直接建单；若没有发送者 ID 或卡片配置，仍会保留可访问的草稿链接
-并写入服务日志，运维人员可从日志取得链接完成排障。
+接口收到合法事件后立即返回 `202 accepted`，后台完成 TAPD 字段读取、GPT 分析、责任人匹配
+和建单。默认不会等待人工确认；设置 `TAPD_AUTO_CREATE_BUGS=false` 才会保留可访问的草稿链接
+并等待卡片或 H5 确认。
 
 ## 5. 上线前必须补强
 
@@ -119,15 +119,16 @@ Authorization: Bearer ACCESS_TOKEN
 - 生产环境强制设置 `PUBLIC_BASE_URL`、`DINGTALK_CLIENT_SECRET` 和 `DINGTALK_FORM_SECRET`，并使用 HTTPS。
 - “实际现象”支持最多 5 个截图/视频，单个不超过 8MB、合计不超过 12MB；媒体会保存到 `MEDIA_DIR`，以 HTML 图片/链接写入 TAPD 描述，并在创建 Bug 成功后逐个上传到 TAPD 附件接口。
 - 可以直接把系统截图复制后粘贴到“实际现象”文字框，浏览器会自动加入媒体列表；文件选择按钮保留作备用。
-- Bug Agent 模式下，单聊直接发送图片/视频即可触发分析；AI 只生成草稿，必须在草稿页点击“确认创建 Bug”才会调用 TAPD。
+- Bug Agent 模式下，单聊直接发送图片/视频即可触发分析；默认由服务端自动创建 Bug，无需确认相关字段。
 - 视频会由服务器抽取最多 4 帧发送给视觉模型，原视频仍会保留为草稿中的链接。
 - “模块”“发现版本”“迭代”“发布计划”从 TAPD `/bugs/get_fields_info`、`/iterations` 和 `/releases` 动态加载，并将选择值分别写入 `module`、`version_report`、`iteration_id`、`release_id`。
 - “处理人”从 TAPD `/workspaces/users` 动态加载，界面显示姓名和账号，提交时写入 TAPD 需要的 `current_owner` 用户名。
 - “处理人”支持输入姓名/账号并从下拉候选中选择；服务端使用钉钉 `msgId` 在短时间窗口内去重，避免重复回复卡片。
+- 自动模式按 AI 解析出的模块、标题和描述匹配 `TAPD_RESPONSIBILITY_WHITELIST`，并将处理人/开发人解析为 TAPD 项目成员账号；未命中时使用 `TAPD_DEFAULT_OWNER` 和 `TAPD_DEFAULT_DEVELOPER`。当前所有自动建单的测试人统一为 `TAPD_DEFAULT_TESTER`（默认 `雷艾琳`）。
 - 当前表单不展示“发现阶段”“软件平台”；“发布计划”可从 TAPD 动态读取并选择。
 - 当前媒体链接是随机文件名但未接入登录鉴权，仅适合内网/PoC；正式环境应使用固定域名、对象存储和带签名的访问链接。
 - 钉钉图片/视频回调中的 `downloadCode` 需要通过钉钉文件下载接口换取临时下载地址；企业应用需要 `DINGTALK_APP_KEY` 和对应 Secret（默认复用 `DINGTALK_CLIENT_SECRET`）。
-- GPT-5.6 只负责分析媒体和生成草稿，TAPD 创建动作由 `/api/drafts/{id}/confirm` 执行，避免 AI 直接产生外部副作用。
+- GPT-5.6 负责分析媒体和生成字段候选；服务端会校验责任人后自动执行 TAPD 创建。将 `TAPD_AUTO_CREATE_BUGS` 设为 `false` 可恢复 `/api/drafts/{id}/confirm` 人工确认模式。
 - 如果配置 `DINGTALK_CARD_TEMPLATE_ID`、`DINGTALK_CARD_CALLBACK_ROUTE_KEY`、`DINGTALK_CARD_CALLBACK_SECRET`，草稿可投放为钉钉互动卡片，确认/取消直接在钉钉窗口内完成；未配置时继续使用 H5 草稿页兜底。
 - TAPD 附件上传使用 `/files/upload_attachment` 的 multipart 请求。默认 `TAPD_ATTACHMENT_TYPE=bug` 且不传 `TAPD_ATTACHMENT_CUSTOM_FIELD`，这样会写入标准 Bug“附件”区域并显示图片；只有需要上传到 Bug 自定义附件字段时才设置 `TAPD_ATTACHMENT_CUSTOM_FIELD`。上传失败时 Bug 仍会创建成功，响应和卡片状态会列出失败附件。
 - Bug 标题会在 AI 草稿、卡片编辑和最终提交时统一规范为 `【模块名称】具体问题描述`；未选择模块时使用 `【待确认模块】` 占位。
