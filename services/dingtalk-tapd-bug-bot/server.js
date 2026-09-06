@@ -1916,12 +1916,13 @@ async function sendDingTalkMessage(sessionWebhook, payload) {
   return response;
 }
 
-function buildBugCreatedNotification(_result, _payload, _attachments, _bugUrl, _mediaCount = 0, senderName = '') {
+function buildBugCreatedNotification(_result, _payload, _attachments, _bugUrl, _mediaCount = 0, senderName = '提问人') {
   /**
    * 统一成功通知正文，webhook 与群消息 OpenAPI 共用同一份文案。
    * 详细字段已经写入 TAPD，群内只保留可追踪的提醒，避免重复刷屏。
    */
-  const mention = senderName ? `@${String(senderName).replaceAll('\n', ' ')} ` : '';
+  // 手工表单可能只有提问人的 staff ID；正文仍保留统一的 @提问人 提示，避免成功反馈失去对象。
+  const mention = `@${String(senderName || '提问人').replaceAll('\n', ' ')} `;
   return `${mention}当前问题已记录，后续结果持续跟踪同步`;
 }
 
