@@ -61,6 +61,9 @@ node server.js
 | `DINGTALK_TAPD_GROUP_NAME` | 否 | `DeepWorks 产品交流群` | 写入来源描述时展示的群名 |
 | `DINGTALK_TAPD_WORKSPACE_ID` | 自动流程需要 | `57379524` | 自动建单的 TAPD 项目 ID |
 | `DINGTALK_TAPD_OWNER` | 否 | `雷艾琳` | 自动建单负责人 |
+| `DINGTALK_TAPD_DEVELOPER` | 否 | 空 | 未命中白名单时的默认开发人 |
+| `DINGTALK_TAPD_TESTER` | 否 | `雷艾琳` | 自动建单测试人；当前不会按模块切换 |
+| `DINGTALK_TAPD_RESPONSIBILITY_WHITELIST` | 否 | 空 | JSON 规则；按消息/模块关键词选择负责人和开发人 |
 | `DINGTALK_TAPD_TITLE_PREFIX` | 否 | `【用户反馈】` | 自动 Bug 标题前缀 |
 | `DINGTALK_TAPD_STATE_DB` | 否 | `.dingtalk-tapd/state.sqlite3` | 事件幂等和失败记录的 SQLite 文件 |
 | `DINGTALK_TAPD_ATTACHMENT_DIR` | 否 | `.dingtalk-tapd/attachments` | DWS 下载资源目录，必须是工作目录内相对路径 |
@@ -102,6 +105,11 @@ node server.js
 | `TAPD_ATTACHMENT_TYPE` | 否 | `bug` | TAPD 附件类型；标准 Bug 附件保持 `bug` |
 | `TAPD_ATTACHMENT_CUSTOM_FIELD` | 否 | 空 | 只有上传到 Bug 自定义附件字段时才填写 |
 | `TAPD_ATTACHMENT_OWNER` | 否 | 空 | TAPD 附件接口的可选 owner |
+| `TAPD_AUTO_CREATE_BUGS` | 否 | `true` | 自动入口是否直接建单；设为 `false` 才保留草稿并等待人工确认 |
+| `TAPD_DEFAULT_OWNER` | 否 | `雷艾琳` | Node 自动模式未命中白名单时的默认负责人 |
+| `TAPD_DEFAULT_DEVELOPER` | 否 | 空 | Node 自动模式未命中白名单时的默认开发人 |
+| `TAPD_DEFAULT_TESTER` | 否 | `雷艾琳` | Node 自动模式统一写入的测试人 |
+| `TAPD_RESPONSIBILITY_WHITELIST` | 否 | 空 | Node 自动模式的模块/关键词责任人 JSON 规则 |
 | `TAPD_DEFAULT_PRIORITY_LABEL` | 否 | `中` | 表单未选择优先级时的默认值 |
 | `TAPD_BUG_URL_TEMPLATE` | 否 | `https://www.tapd.cn/{workspace_id}/bugtrace/bugs/view?bug_id={id}` | 创建成功后的链接模板，必须保留两个占位符 |
 
@@ -140,6 +148,19 @@ node server.js
 | `MOCK_TAPD` | 本地验证可用 | `false` | `true` 时不请求 TAPD，只返回模拟 Bug ID |
 
 `auto` 模式先调用 Responses API；遇到 400/404/405/501 或明确的“不支持”错误时回退到 Chat Completions。中转站若只支持其中一种模式，建议显式设置。
+
+自动模式会先读取 TAPD 项目成员，再按白名单把姓名解析为成员账号；未命中规则时使用 `TAPD_DEFAULT_OWNER`、`TAPD_DEFAULT_DEVELOPER` 和 `TAPD_DEFAULT_TESTER`。如果希望人工检查模型草稿，把 `TAPD_AUTO_CREATE_BUGS` 设为 `false`。
+
+责任白名单支持“数组”或“模块名到责任人对象”的 JSON。`match`/`module`/`keywords` 用于包含匹配，`*`、`default` 或 `默认` 表示默认规则：
+
+```json
+[
+  {"match": "企业知识中心", "owner": "负责人账号", "developer": "开发人账号"},
+  {"match": "*", "owner": "默认负责人账号", "developer": "默认开发人账号"}
+]
+```
+
+Python 使用 `DINGTALK_TAPD_RESPONSIBILITY_WHITELIST`、`DINGTALK_TAPD_OWNER` 等变量；Node 使用 `TAPD_RESPONSIBILITY_WHITELIST`、`TAPD_DEFAULT_OWNER` 等变量。两端规则格式相同，但配置不会自动跨进程读取。
 
 ### Python 到 Node 的桥接
 
@@ -206,7 +227,7 @@ AGENT_INGEST_SECRET='同一密钥'
 | `createAndDeliverInteractiveDraft()` / `updateInteractiveCard()` | 卡片变量、私投和串行更新 |
 | `createServer()` | HTTP 路由和鉴权入口 |
 
-扩展字段时要同步更新模型 JSON 字段、`normalizeAgentDraft`、卡片参数映射、表单提交和 TAPD payload；不要只改前端显示名。任何新的外部写操作都应继续放在人工确认之后，并保留来源 `conversationId`、`messageId` 和幂等键。
+扩展字段时要同步更新模型 JSON 字段、`normalizeAgentDraft`、责任人解析、卡片参数映射、表单提交和 TAPD payload；不要只改前端显示名。若保留自动建单模式，新增外部写操作必须沿用白名单、签名和幂等约束；人工模式则继续放在确认按钮之后，并保留来源 `conversationId`、`messageId` 和幂等键。
 
 ## 7. 安全底线
 

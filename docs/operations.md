@@ -7,7 +7,7 @@
 ### Python Bridge
 
 ```bash
-cd /Users/alin/Documents/ChatGPT/tapd
+cd <repo-root>
 . .venv/bin/activate
 dws auth status
 which dws
@@ -176,19 +176,19 @@ dingtalk-tapd agent-listen --max-events 1
 dingtalk-tapd agent-listen
 ```
 
-监听器负责 DWS 事件过滤、附件下载和 HMAC 签名；它不会携带 TAPD 凭据，也不会直接创建 TAPD Bug。服务端收到事件后返回 `202 accepted`，后台完成模型分析和卡片投递。
+监听器负责 DWS 事件过滤、附件下载和 HMAC 签名；它不会携带 TAPD 凭据，也不会直接创建 TAPD Bug。服务端收到事件后返回 `202 accepted`，后台完成模型分析、责任人匹配和后续建单。
 
 ### 服务端端到端流程
 
 1. 钉钉机器人收到文本、截图或视频。
 2. Node 服务校验回调签名并下载媒体。
 3. TAPD 动态字段加载后，模型生成 JSON 草稿。
-4. 优先投递互动卡片；卡片未配置或投递失败时，回退到 `/draft/{id}` 草稿链接。
-5. 人工修改并点击“确认创建 Bug”。
-6. 服务调用 TAPD `/bugs`，再逐个上传附件。
+4. 按 `TAPD_RESPONSIBILITY_WHITELIST` 解析负责人、开发人和测试人，并校验项目成员账号。
+5. 默认 `TAPD_AUTO_CREATE_BUGS=true`：直接调用 TAPD `/bugs`，再逐个上传附件。
+6. `TAPD_AUTO_CREATE_BUGS=false`：投递互动卡片；卡片未配置或投递失败时，回退到 `/draft/{id}` 草稿链接，等待人工确认。
 7. 通过临时 `sessionWebhook` 或机器人群消息 API 回传 Bug ID 和链接。
 
-服务端绝不会因为模型返回草稿就直接创建 Bug。草稿默认 30 分钟过期，服务重启会清空尚未确认的草稿。
+自动模式不会等待卡片确认；人工模式的草稿默认 30 分钟过期，服务重启会清空尚未确认的草稿。
 
 ## 5. Node H5 与互动卡片
 
@@ -211,7 +211,7 @@ dingtalk-tapd agent-listen
 sudo /opt/dingtalk-tapd-bug-bot/configure-interactive-card.sh
 ```
 
-脚本会写入模板 ID、RouteKey、Secret、公网地址，注册 `${PUBLIC_BASE_URL}/dingtalk/card-callback`，重启服务并检查状态。卡片确认统一私投给 `DINGTALK_CARD_REVIEW_RECIPIENT_ID`，默认不是提问人。
+脚本会写入模板 ID、RouteKey、Secret、公网地址，注册 `${PUBLIC_BASE_URL}/dingtalk/card-callback`，重启服务并检查状态。只有 `TAPD_AUTO_CREATE_BUGS=false` 时卡片确认才是建单必经步骤；卡片统一私投给 `DINGTALK_CARD_REVIEW_RECIPIENT_ID`，默认不是提问人。
 
 ## 6. systemd 运维
 
@@ -258,7 +258,7 @@ sudo /opt/dingtalk-tapd-bug-bot/configure-bug-agent.sh
 | TAPD 401/403 | `/api/agent/status`、令牌/项目权限 | 优先配置 OAuth；确认 workspace、字段读取、成员和附件权限 |
 | Bug Agent 提示未配置模型 | `openai.configured`、`OPENAI_BASE_URL`、`OPENAI_MODEL` | 设置 API Key 和实际可用模型；中转站按能力设置 API mode |
 | 图片/视频无法下载 | `dingTalkMedia` 状态、`DINGTALK_ROBOT_CODE` | 配置 RobotCode，并提供静态 access token 或 AppKey/Secret |
-| 互动卡片没出现 | `interactiveCard` 状态、服务日志 | 三项卡片配置必须齐全；失败时使用草稿 H5 链接 |
+| 互动卡片没出现 | `automation.autoCreateBugs`、`interactiveCard` 状态、服务日志 | 自动模式下不需要卡片；人工模式下三项卡片配置必须齐全，失败时使用草稿 H5 链接 |
 | 钉钉回调 401 | `DINGTALK_CLIENT_SECRET`、公网 HTTPS | 检查回调 Secret、时间戳和反向代理是否保留请求头 |
 | 草稿链接失效 | 草稿是否超过 30 分钟或服务是否重启 | 重新发送截图/视频生成草稿 |
 | Bug 已创建但附件失败 | 返回的 `attachmentFailures`、服务日志 | 检查 `MEDIA_DIR`、TAPD 附件权限和文件大小；可在 TAPD 手动补传 |
@@ -267,7 +267,7 @@ sudo /opt/dingtalk-tapd-bug-bot/configure-bug-agent.sh
 ## 8. 日常变更规则
 
 - 修改目标群、workspace 或负责人后，先用 `search`/`draft` 做只读验证，再开启 `listen`/`sync`。
-- 修改模型提示词或字段映射后，先用 `MOCK_TAPD=true` 验证完整流程，再用单条测试消息验证真实 TAPD。
+- 修改模型提示词、字段映射或责任人白名单后，先用 `MOCK_TAPD=true` 验证完整流程，再用单条测试消息验证真实 TAPD。
 - 修改回调、卡片或签名逻辑后，同时检查 `/healthz`、`/api/agent/status` 和一条实际钉钉回调。
 - 新增外部写接口时保留人工确认、来源 ID、幂等键和错误可见性；不要把未知写入结果自动重试。
 - 生产发布前确认环境文件权限、HTTPS、日志脱敏、媒体目录清理和 systemd 自动重启状态。
