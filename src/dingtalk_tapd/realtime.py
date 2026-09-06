@@ -269,6 +269,7 @@ class RealtimeEventListener:
         mention_targets: Sequence[str] | None = None,
         mention_target_ids: Sequence[str] | None = None,
         include_at_me: bool = True,
+        require_mention: bool = True,
         group_id: str | None = None,
     ) -> None:
         self.config = config
@@ -279,6 +280,8 @@ class RealtimeEventListener:
         self.mention_targets = tuple(mention_targets) if mention_targets is not None else automation.mention_targets
         self.mention_target_ids = tuple(mention_target_ids) if mention_target_ids is not None else automation.mention_target_ids
         self.include_at_me = include_at_me
+        # 内容扫描模式关闭 @ 门槛；目标群和企业知识中心相关性仍由上层服务校验。
+        self.require_mention = require_mention
         # 多群兼容由 CLI 为每个 openConversationId 建立独立订阅，避免 DWS 把逗号串当成单个群 ID。
         self.group_id = group_id or automation.group_id
         self._process: subprocess.Popen[str] | None = None
@@ -398,7 +401,7 @@ class RealtimeEventListener:
             reader_thread.join(timeout=1)
 
     def _read_events(self) -> Iterator[RealtimeEvent]:
-        """读取并筛选事件；群订阅只放行 @ 指定对象的消息。"""
+        """读取并筛选事件；是否要求 @ 由调用方决定，支持全量群内容扫描。"""
 
         process = self._process
         if process is None or process.stdout is None:
@@ -417,7 +420,9 @@ class RealtimeEventListener:
             if not isinstance(payload, Mapping):
                 continue
             event = RealtimeEvent.from_payload(payload)
-            if event is None or not event.is_automation_trigger(
+            if event is None:
+                continue
+            if self.require_mention and not event.is_automation_trigger(
                 self.mention_targets,
                 self.mention_target_ids,
             ):

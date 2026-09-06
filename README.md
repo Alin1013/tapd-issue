@@ -34,7 +34,7 @@ export TAPD_API_PASSWORD=...
 dingtalk-tapd listen
 ```
 
-监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_at user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。实时群事件只放行配置中的 @ 目标；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
+监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。`listen` 会读取目标群全部消息，再按正文/OCR 内容筛选企业知识中心、知识库或知识管理主题；需要只接收 @机器人的桥接场景请使用 `agent-listen`。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。
 
 - 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；

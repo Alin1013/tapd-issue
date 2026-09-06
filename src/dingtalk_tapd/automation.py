@@ -332,11 +332,13 @@ def _tapd_reference(value: Any) -> tuple[str | None, str | None]:
 
 
 class AutoIssueService:
-    """消费实时目标 @ 事件或历史同步消息并自动创建 TAPD Bug。"""
+    """消费实时群消息或历史同步消息并自动创建 TAPD Bug。"""
 
-    def __init__(self, workflow: Workflow, config: AutomationConfig) -> None:
+    def __init__(self, workflow: Workflow, config: AutomationConfig, *, require_mention: bool = True) -> None:
         self.workflow = workflow
         self.config = config
+        # listen 的内容扫描模式不要求 @；agent-listen 和旧调用仍保留 @ 门槛。
+        self.require_mention = require_mention
         self.analyzer = IssueAnalyzer(config)
         self.store = EventStore(config.state_db)
 
@@ -347,7 +349,10 @@ class AutoIssueService:
         if not self.config.is_target_group(event.conversation_id):
             # 群名只用于可读提示，实际过滤始终使用不可变的 openConversationId。
             return AutomationOutcome("ignored", event_key, event.message_id, error="非目标群")
-        if not event.is_automation_trigger(self.config.mention_targets, self.config.mention_target_ids):
+        if self.require_mention and not event.is_automation_trigger(
+            self.config.mention_targets,
+            self.config.mention_target_ids,
+        ):
             return AutomationOutcome("ignored", event_key, event.message_id, error="未 @ 自动建单对象")
         if not self.store.claim(
             event_key,

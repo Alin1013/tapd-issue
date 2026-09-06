@@ -119,7 +119,7 @@ dingtalk-tapd listen
 dingtalk-tapd listen --duration 10m
 ```
 
-实时监听订阅当前用户 @事件和目标群事件；目标群消息只有 @配置目标才会放行。通过后，程序会：
+实时监听订阅每个目标群的全部消息，不要求消息带 @；通过后，程序会：
 
 1. 用 `conversationId:messageId` 去重。
 2. 下载消息详情和附件，必要时尝试 OCR。

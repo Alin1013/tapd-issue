@@ -216,12 +216,12 @@ def _consume_target_groups(
 
 
 def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
-    """运行实时自动建单；业务默认值从 AutomationConfig 读取而不是命令行重复填写。"""
+    """运行实时内容扫描建单；相关性由企业知识中心主题规则决定。"""
 
     if args.max_events < 0:
         raise ValueError("--max-events 不能为负数")
     automation = AutomationConfig.from_env()
-    service = AutoIssueService(workflow, automation)
+    service = AutoIssueService(workflow, automation, require_mention=False)
     def listener_factory(group_id: str) -> RealtimeEventListener:
         """为指定群构造普通自动建单监听器。"""
 
@@ -230,6 +230,9 @@ def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
             automation,
             duration=args.duration,
             max_events=0,
+            # listen 需要读取目标群的所有消息，再由分析器判断是否属于企业知识中心。
+            include_at_me=False,
+            require_mention=False,
             group_id=group_id,
         )
     try:
