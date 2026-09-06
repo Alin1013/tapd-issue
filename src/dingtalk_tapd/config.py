@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 
@@ -53,6 +55,56 @@ class AgentConfig:
         return cls(url, secret, timeout_seconds)
 
 
+def _parse_responsibility_whitelist(raw_value: str) -> tuple[dict[str, Any], ...]:
+    """解析模块责任人白名单，统一兼容列表规则与模块名对象映射。"""
+
+    source = raw_value.strip()
+    if not source:
+        return ()
+    try:
+        parsed = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST 必须是合法 JSON") from exc
+    if isinstance(parsed, list):
+        entries = parsed
+    elif isinstance(parsed, dict):
+        entries = [
+            {"match": key, **(value if isinstance(value, dict) else {"owner": value})}
+            for key, value in parsed.items()
+        ]
+    else:
+        raise ValueError("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST 必须是 JSON 数组或对象")
+    normalized: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST 的每条规则必须是对象")
+        raw_matches = [entry.get(key) for key in ("match", "module", "modules", "keyword", "keywords")]
+        matches = tuple(
+            str(value).strip()
+            for item in raw_matches
+            for value in (item if isinstance(item, list) else (item,))
+            if value is not None and str(value).strip()
+        )
+        def pick(*keys: str) -> str:
+            """从中英文别名中取第一个非空责任人字段。"""
+
+            return next(
+                (str(entry[key]).strip() for key in keys if entry.get(key) is not None and str(entry[key]).strip()),
+                "",
+            )
+
+        normalized.append(
+            {
+                "matches": matches,
+                "owner": pick("owner", "current_owner", "currentOwner", "handler", "处理人"),
+                "developer": pick("developer", "de", "developerName", "开发人"),
+                "tester": pick("tester", "te", "testerName", "测试人"),
+                "default": any(value.lower() in {"*", "default", "默认"} for value in matches),
+            }
+        )
+    return tuple(normalized)
+
+
 @dataclass(frozen=True, slots=True)
 class AutomationConfig:
     """自动建单的业务默认值；环境变量只作为高级覆盖，不要求每次调用填写。"""
@@ -61,6 +113,9 @@ class AutomationConfig:
     group_name: str = "DeepWorks 产品交流群"
     workspace_id: str = "57379524"
     owner: str = "雷艾琳"
+    developer: str = ""
+    tester: str = "雷艾琳"
+    responsibility_whitelist: tuple[dict[str, Any], ...] = ()
     title_prefix: str = "【用户反馈】"
     state_db: str = ".dingtalk-tapd/state.sqlite3"
     attachment_dir: str = ".dingtalk-tapd/attachments"
@@ -128,6 +183,11 @@ class AutomationConfig:
             group_name=os.getenv("DINGTALK_TAPD_GROUP_NAME", defaults.group_name).strip(),
             workspace_id=os.getenv("DINGTALK_TAPD_WORKSPACE_ID", defaults.workspace_id).strip(),
             owner=os.getenv("DINGTALK_TAPD_OWNER", defaults.owner).strip(),
+            developer=os.getenv("DINGTALK_TAPD_DEVELOPER", defaults.developer).strip(),
+            tester=os.getenv("DINGTALK_TAPD_TESTER", defaults.tester).strip() or defaults.tester,
+            responsibility_whitelist=_parse_responsibility_whitelist(
+                os.getenv("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST", "")
+            ),
             title_prefix=os.getenv("DINGTALK_TAPD_TITLE_PREFIX", defaults.title_prefix),
             state_db=os.getenv("DINGTALK_TAPD_STATE_DB", defaults.state_db).strip(),
             attachment_dir=attachment_dir,

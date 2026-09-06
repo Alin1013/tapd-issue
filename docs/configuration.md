@@ -5,9 +5,9 @@
 | 进程 | 目录 | 职责 |
 | --- | --- | --- |
 | Python Bridge | 仓库根目录 | 调用 DWS 读取群消息，生成/创建 TAPD Bug，维护事件去重账本 |
-| Node Bug Agent | `services/dingtalk-tapd-bug-bot` | 接收钉钉回调，下载媒体，调用模型生成草稿，人工确认后创建 TAPD Bug |
+| Node Bug Agent | `services/dingtalk-tapd-bug-bot` | 接收钉钉回调，下载媒体，调用模型分析并按配置自动创建 TAPD Bug |
 
-两条链路可以单独使用，也可以通过 HMAC 签名的 `/api/agent/events` 连接：Python 负责监听目标群，Node 负责模型分析、互动卡片和 TAPD 写入。
+两条链路可以单独使用，也可以通过 HMAC 签名的 `/api/agent/events` 连接：Python 负责监听目标群，Node 负责模型分析、责任人匹配和 TAPD 写入。
 
 ## 1. 配置注入
 
@@ -227,7 +227,7 @@ AGENT_INGEST_SECRET='同一密钥'
 | `createAndDeliverInteractiveDraft()` / `updateInteractiveCard()` | 卡片变量、私投和串行更新 |
 | `createServer()` | HTTP 路由和鉴权入口 |
 
-扩展字段时要同步更新模型 JSON 字段、`normalizeAgentDraft`、责任人解析、卡片参数映射、表单提交和 TAPD payload；不要只改前端显示名。若保留自动建单模式，新增外部写操作必须沿用白名单、签名和幂等约束；人工模式则继续放在确认按钮之后，并保留来源 `conversationId`、`messageId` 和幂等键。
+扩展字段时要同步更新模型 JSON 字段、`normalizeAgentDraft`、责任人解析、卡片参数映射、表单提交和 TAPD payload；不要只改前端显示名。自动建单必须沿用白名单、签名和幂等约束；人工回退模式则继续放在确认按钮之后，并保留来源 `conversationId`、`messageId` 和幂等键。
 
 ## 7. 安全底线
 

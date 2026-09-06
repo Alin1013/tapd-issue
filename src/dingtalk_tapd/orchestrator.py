@@ -121,6 +121,9 @@ class Workflow:
             "title",
             "name",
             "media",
+            # 自动入口填充的开发人/测试人是 TAPD 标准 Bug 字段，不走未知自定义字段校验。
+            "de",
+            "te",
             "image_url",
             "image_urls",
             "video_url",

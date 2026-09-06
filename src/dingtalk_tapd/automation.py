@@ -270,6 +270,28 @@ def _direct_media(refs: tuple[str, ...]) -> tuple[dict[str, str], ...]:
     return tuple(media)
 
 
+def _automatic_responsibility(text: str, config: AutomationConfig) -> dict[str, str]:
+    """按消息分析文本匹配责任白名单，并固定当前阶段的测试人。"""
+
+    corpus = text.lower()
+    rules = config.responsibility_whitelist
+    default_rule = next((rule for rule in rules if rule.get("default")), {})
+    matched_rule = next(
+        (
+            rule
+            for rule in rules
+            if any(str(match).lower() != "*" and str(match).lower() in corpus for match in rule.get("matches", ()))
+        ),
+        default_rule,
+    )
+    # 测试人暂不跟随模块变化，避免责任名单补齐前出现不一致的回归口径。
+    return {
+        "owner": str(matched_rule.get("owner") or config.owner).strip(),
+        "developer": str(matched_rule.get("developer") or config.developer).strip(),
+        "tester": config.tester,
+    }
+
+
 def _tapd_reference(value: Any) -> tuple[str | None, str | None]:
     """从 MCP/REST 多种返回包装中提取 TAPD ID 与链接。"""
 
@@ -347,6 +369,19 @@ class AutoIssueService:
         description = analysis.description
         if detail_error:
             description += f"\n\n## 处理告警\n- {detail_error}"
+        responsibility = _automatic_responsibility(
+            "\n".join((analysis.summary, event.content, *analysis.ocr_text)),
+            self.config,
+        )
+        fields = {
+            "owner": responsibility["owner"],
+            "priority": analysis.priority,
+            "te": responsibility["tester"],
+        }
+        if responsibility["developer"]:
+            fields["de"] = responsibility["developer"]
+        if analysis.media:
+            fields["media"] = list(analysis.media)
         draft = IssueDraft(
             issue_type=IssueType.BUG,
             workspace_id=self.config.workspace_id,
@@ -361,11 +396,7 @@ class AutoIssueService:
                     resource_refs=event.resource_refs,
                 ),
             ),
-            fields={
-                "owner": self.config.owner,
-                "priority": analysis.priority,
-                **({"media": list(analysis.media)} if analysis.media else {}),
-            },
+            fields=fields,
         )
         try:
             # 自动入口已由目标群和主题规则筛选；仍读取项目元数据/字段作为写前契约校验。

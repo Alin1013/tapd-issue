@@ -255,6 +255,9 @@ class McpTapdClient:
             "owner",
             "priority",
             "severity",
+            # 责任人分配使用 TAPD 标准字段，保持与 owner 的基础字段映射同层传递。
+            "de",
+            "te",
             "media",
             "image_url",
             "image_urls",

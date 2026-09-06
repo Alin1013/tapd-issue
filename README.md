@@ -71,7 +71,7 @@ dingtalk-tapd sync \
 
 同步结果为 partial 时默认只输出完整性告警、不自动写入；确认时间范围后可显式加 `--allow-partial`。
 
-高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`、`DINGTALK_TAPD_MENTION_TARGET_IDS`、`DINGTALK_TAPD_BOT_MENTION_TARGETS`（默认 `缺陷机器人`）、`DINGTALK_TAPD_BOT_MENTION_TARGET_IDS`（默认使用缺陷机器人的稳定 ID）。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
+高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_DEVELOPER`、`DINGTALK_TAPD_TESTER`（默认 `雷艾琳`）、`DINGTALK_TAPD_RESPONSIBILITY_WHITELIST`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`、`DINGTALK_TAPD_MENTION_TARGET_IDS`、`DINGTALK_TAPD_BOT_MENTION_TARGETS`（默认 `缺陷机器人`）、`DINGTALK_TAPD_BOT_MENTION_TARGET_IDS`（默认使用缺陷机器人的稳定 ID）。白名单使用 JSON 数组或对象，规则中的 `match/module/keywords` 用于匹配消息，`owner/current_owner` 和 `developer/de` 用于分配字段。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
 
 TAPD MCP 只有在工具契约声明支持时才接受图片/视频公网直链作为富媒体；旧版 MCP 会自动降级为把直链写入描述。钉钉下载到本地的文件不会被冒充成“已上传”，当前未实现把本地文件直接上传到 TAPD 的未验证接口。
 
@@ -143,6 +143,6 @@ dingtalk-tapd create \
 
 - 群名必须唯一解析，零命中或多候选不会自动选择。
 - DWS 分页缺少 `complete=true`、存在 `hasMore` 或 `failures` 时结果会标记为 partial。
-- 手动 `create` 没有 `--confirm` 时不会调用 TAPD 创建接口；`listen` 和 `sync` 只在目标群消息被分析为企业知识中心相关内容后自动写入。
+- 手动 `create` 仍需要 `--confirm`；`listen` 和 `sync` 在目标群消息被分析为企业知识中心相关内容后自动写入，并把 `te` 测试人统一设置为 `雷艾琳`。
 - 令牌只从环境变量读取，不写入 JSON 输出、日志或仓库。
 - `listen` 和 `sync` 的事件状态、去重键持久化在 `.dingtalk-tapd/state.sqlite3`；写入结果未知时标记为失败供人工排查，不自动重试，只有显式 `--retry-failed` 才会补偿已知的写入前校验失败。
