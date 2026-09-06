@@ -1,0 +1,24 @@
+# Python Bridge 常驻监听单元；与 Node Bug Agent 使用不同的进程和工作目录。
+[Unit]
+Description=DingTalk DWS to TAPD Python Bridge listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dingtalkbot
+Group=dingtalkbot
+# 状态库和下载附件放在 /var/lib，避免 ProtectSystem 影响业务写入。
+WorkingDirectory=/var/lib/dingtalk-tapd
+EnvironmentFile=/etc/dingtalk-tapd-listen.env
+ExecStart=/opt/dingtalk-tapd/.venv/bin/dingtalk-tapd listen
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/var/lib/dingtalk-tapd
+
+[Install]
+WantedBy=multi-user.target

@@ -327,6 +327,8 @@ class TapdConfig:
     api_base_url: str = "https://api.tapd.cn"
     base_url: str = "https://www.tapd.cn"
     access_token: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
     api_user: str | None = None
     api_password: str | None = None
     # 直接构造配置时保持 REST 兼容；CLI 的 from_env 默认覆盖为 MCP。
@@ -344,6 +346,8 @@ class TapdConfig:
             api_base_url=os.getenv("TAPD_API_BASE_URL", "https://api.tapd.cn").rstrip("/"),
             base_url=os.getenv("TAPD_BASE_URL", "https://www.tapd.cn").rstrip("/"),
             access_token=os.getenv("TAPD_ACCESS_TOKEN") or None,
+            client_id=os.getenv("TAPD_CLIENT_ID") or None,
+            client_secret=os.getenv("TAPD_CLIENT_SECRET") or None,
             api_user=os.getenv("TAPD_API_USER") or None,
             api_password=os.getenv("TAPD_API_PASSWORD") or None,
         )
@@ -356,6 +360,8 @@ class TapdConfig:
         if self.backend != "rest":
             raise ValueError("TAPD_BACKEND 只能是 mcp 或 rest")
         if self.access_token:
+            return
+        if self.client_id and self.client_secret:
             return
         if self.api_user and self.api_password:
             return

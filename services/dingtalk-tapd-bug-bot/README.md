@@ -112,6 +112,10 @@ Authorization: Bearer ACCESS_TOKEN
 和建单。事件 `eventId` 在 30 分钟内重复时返回 `duplicate`。默认不会等待人工确认；设置
 `TAPD_AUTO_CREATE_BUGS=false` 才会保留可访问的草稿链接并等待卡片或 H5 确认。
 
+如果要在同一台服务器上运行无 @ 的全量内容扫描，请单独部署仓库根目录 Python Bridge 的
+`dingtalk-tapd-listen.service`；本 Node 服务本身不会启动 Python 监听器。两个进程若监听同一
+目标群，会分别执行建单，当前版本没有跨进程的语义重复检测，因此应只启用一个自动写入入口。
+
 ## 5. 当前边界与上线前检查
 
 当前代码定位为快速 PoC，正式使用前至少需要：

@@ -55,6 +55,48 @@ curl -fsS http://127.0.0.1:3000/api/agent/status
 
 `/api/agent/status` 只返回“是否已配置”和非敏感的模型/地址信息，不会返回 token 或密钥。
 
+### 服务器常驻 Python Bridge
+
+Python Bridge 与 Node Bug Agent 是两个独立进程。服务器部署 `listen` 时，建议把仓库安装到
+`/opt/dingtalk-tapd`，把状态库和附件放到 `/var/lib/dingtalk-tapd`，并使用仓库提供的
+`services/dingtalk-tapd-bridge/dingtalk-tapd-listen.service.example` 创建独立 systemd 单元：
+
+```bash
+sudo useradd --system --home /var/lib/dingtalk-tapd --create-home dingtalkbot 2>/dev/null || true
+sudo install -d -o dingtalkbot -g dingtalkbot /var/lib/dingtalk-tapd
+sudo install -d -o root -g dingtalkbot -m 0750 /opt/dingtalk-tapd
+cd /opt/dingtalk-tapd
+uv python install 3.11
+uv venv --python 3.11 .venv
+. .venv/bin/activate
+pip install -e .
+sudo install -o root -g root -m 0644 \
+  services/dingtalk-tapd-bridge/dingtalk-tapd-listen.service.example \
+  /etc/systemd/system/dingtalk-tapd-listen.service
+```
+
+把 `.env.example` 复制为 `/etc/dingtalk-tapd-listen.env` 后填写 TAPD 凭据和目标群配置：
+
+```bash
+sudo install -o root -g dingtalkbot -m 0640 \
+  services/dingtalk-tapd-bridge/.env.example \
+  /etc/dingtalk-tapd-listen.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now dingtalk-tapd-listen.service
+```
+
+启动前必须以 `dingtalkbot` 用户完成 DWS 登录，并确保该用户能读取登录态：
+
+```bash
+sudo -u dingtalkbot -H dws auth status
+sudo -u dingtalkbot -H /opt/dingtalk-tapd/.venv/bin/dingtalk-tapd listen --max-events 1
+sudo systemctl status dingtalk-tapd-listen.service
+sudo journalctl -u dingtalk-tapd-listen.service -f
+```
+
+`listen` 会直接创建 TAPD Bug；如果服务器同时运行 `agent-listen` 或钉钉机器人自动建单，
+不要让两条链路处理同一目标群，否则当前版本只按消息 ID 去重，无法阻止跨服务的语义重复工单。
+
 ## 2. 手工检索与建单
 
 ### 第一步：只读搜索

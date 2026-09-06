@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -28,6 +29,8 @@ class TapdClient:
 
     config: TapdConfig
     timeout_seconds: float = 30.0
+    _oauth_token: str | None = None
+    _oauth_expires_at: float = 0.0
 
     def _headers(self) -> dict[str, str]:
         """生成认证头；令牌值只进入请求头，不写入异常消息。"""
@@ -40,10 +43,51 @@ class TapdClient:
         }
         if self.config.access_token:
             headers["Authorization"] = f"Bearer {self.config.access_token}"
+        elif self.config.client_id and self.config.client_secret:
+            # 常驻监听使用 client-credentials；缓存短期 token，避免每条消息都请求授权端点。
+            headers["Authorization"] = f"Bearer {self._oauth_access_token()}"
         else:
             raw = f"{self.config.api_user}:{self.config.api_password}".encode()
             headers["Authorization"] = "Basic " + base64.b64encode(raw).decode("ascii")
         return headers
+
+    def _oauth_access_token(self, *, force_refresh: bool = False) -> str:
+        """用 TAPD 应用凭据换取并缓存短期 access token。"""
+
+        now = time.time()
+        if not force_refresh and self._oauth_token and self._oauth_expires_at > now + 60:
+            return self._oauth_token
+        if not self.config.client_id or not self.config.client_secret:
+            raise TapdError("TAPD OAuth 应用凭据未配置")
+        raw_credentials = f"{self.config.client_id}:{self.config.client_secret}".encode()
+        request = urllib.request.Request(
+            f"{self.config.api_base_url}/tokens/request_token",
+            data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": "Basic " + base64.b64encode(raw_credentials).decode("ascii"),
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = self._decode_response(response.read())
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            raise TapdApiError("TAPD OAuth token 请求失败") from exc
+        token = payload.get("access_token") if isinstance(payload, Mapping) else None
+        if not token and isinstance(payload, Mapping) and isinstance(payload.get("data"), Mapping):
+            token = payload["data"].get("access_token")
+        if not token:
+            raise TapdApiError("TAPD OAuth 未返回 access_token")
+        expires_in = payload.get("expires_in", 7200) if isinstance(payload, Mapping) else 7200
+        try:
+            lifetime = max(60.0, float(expires_in) - 60.0)
+        except (TypeError, ValueError):
+            lifetime = 7140.0
+        self._oauth_token = str(token)
+        self._oauth_expires_at = time.time() + lifetime
+        return self._oauth_token
 
     @staticmethod
     def _decode_response(raw: bytes) -> Any:
