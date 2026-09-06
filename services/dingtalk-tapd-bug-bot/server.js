@@ -1594,7 +1594,11 @@ function extractReleases(result) {
       value: String(item.id || item.release_id || ''),
       label: String(item.name || item.title || ''),
       // 发布时间优先，其次使用结束/创建时间；保留原始索引确保无日期时稳定排序。
-      sortTime: parseReleaseTime(item.release_date || item.release_time || item.publish_time || item.end_date || item.finish_date || item.created || item.created_at),
+      sortTime: parseReleaseTime(
+        item.release_date || item.releaseDate || item.release_time || item.releaseTime ||
+        item.publish_time || item.publishTime || item.end_date || item.endDate ||
+        item.finish_date || item.finishDate || item.created || item.created_at || item.createdAt
+      ),
       index
     }))
     .filter((item) => item.value && item.label);
