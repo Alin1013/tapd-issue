@@ -8,10 +8,15 @@ Wants=network-online.target
 Type=simple
 User=dingtalkbot
 Group=dingtalkbot
+# systemd 负责创建运行数据目录；DWS 登录态、SQLite 账本和附件都落在这里。
+StateDirectory=dingtalk-tapd
+StateDirectoryMode=0750
 # 状态库和下载附件放在 /var/lib，避免 ProtectSystem 影响业务写入。
 WorkingDirectory=/var/lib/dingtalk-tapd
 Environment=HOME=/var/lib/dingtalk-tapd
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/dingtalk-tapd-listen.env
+ExecStartPre=/usr/bin/test -x /opt/dingtalk-tapd/.venv/bin/dingtalk-tapd
 ExecStart=/opt/dingtalk-tapd/.venv/bin/dingtalk-tapd listen
 # 消息来源账本和下载附件属于业务数据，新文件默认不允许其他系统用户读取。
 UMask=0027
@@ -19,7 +24,7 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/dingtalk-tapd
 

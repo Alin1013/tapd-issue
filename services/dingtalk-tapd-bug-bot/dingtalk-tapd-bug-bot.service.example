@@ -7,15 +7,21 @@ Wants=network-online.target
 Type=simple
 User=dingtalkbot
 Group=dingtalkbot
+# systemd 创建媒体目录并限制其默认权限，避免首次启动时因目录不存在失败。
+StateDirectory=dingtalk-tapd-bug-bot
+StateDirectoryMode=0750
 WorkingDirectory=/opt/dingtalk-tapd-bug-bot
-EnvironmentFile=-/etc/dingtalk-tapd-bug-bot.env
+Environment=NODE_ENV=production
+Environment=MEDIA_DIR=/var/lib/dingtalk-tapd-bug-bot/media
+EnvironmentFile=/etc/dingtalk-tapd-bug-bot.env
+ExecStartPre=/usr/bin/node --check /opt/dingtalk-tapd-bug-bot/server.js
 ExecStart=/usr/bin/node /opt/dingtalk-tapd-bug-bot/server.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
-ProtectSystem=full
+ProtectSystem=strict
 ReadWritePaths=/var/lib/dingtalk-tapd-bug-bot
 
 [Install]

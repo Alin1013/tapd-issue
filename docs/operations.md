@@ -18,6 +18,8 @@
 
 ## 1. 启动前检查
 
+服务器首次安装和更新优先使用 [服务器部署手册](server-deployment.md) 中的两个幂等脚本；本节保留本地/手工启动方式，便于排障。
+
 ### Python Bridge
 
 ```bash
@@ -96,6 +98,23 @@ sudo journalctl -u dingtalk-tapd-listen.service -f
 
 `listen` 会直接创建 TAPD Bug；如果服务器同时运行 `agent-listen` 或钉钉机器人自动建单，
 不要让两条链路处理同一目标群，否则当前版本只按消息 ID 去重，无法阻止跨服务的语义重复工单。
+
+服务器自动化安装：
+
+```bash
+sudo INSTALL_ROOT=/opt/dingtalk-tapd services/dingtalk-tapd-bridge/install.sh
+sudo INSTALL_ROOT=/opt/dingtalk-tapd-bug-bot services/dingtalk-tapd-bug-bot/install.sh
+```
+
+脚本只在环境文件不存在时复制模板；已有 `/etc/dingtalk-tapd-listen.env` 和
+`/etc/dingtalk-tapd-bug-bot.env` 会保留。填入配置并完成 DWS 登录后，再执行：
+
+```bash
+sudo systemctl enable --now dingtalk-tapd-listen.service
+sudo systemctl enable --now dingtalk-tapd-bug-bot.service
+```
+
+完整的目录、权限、更新备份和自然日历史同步流程见 [服务器部署手册](server-deployment.md)。
 
 ## 2. 手工检索与建单
 

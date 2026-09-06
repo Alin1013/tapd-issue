@@ -6,6 +6,7 @@
 
 - [配置说明](docs/configuration.md)：环境变量、权限、数据生命周期和二次开发入口。
 - [操作手册](docs/operations.md)：安装验证、手工建单、自动监听、远端 Agent、systemd 运维和故障排查。
+- [服务器部署手册](docs/server-deployment.md)：两套 systemd 服务、环境文件、更新发布和历史同步验收。
 - [当前内容总览](docs/current-state.md)：当前能力、默认业务口径、状态语义和已知边界。
 
 ## 安装
