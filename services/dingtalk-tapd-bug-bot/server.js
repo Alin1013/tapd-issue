@@ -1402,7 +1402,11 @@ function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
     ...input,
     current_owner: input.current_owner || config.defaultOwner,
     de: input.de || config.defaultDeveloper,
-    te: input.te || config.defaultTester
+    te: input.te || config.defaultTester,
+    // TAPD 标准字段允许直接传展示值；动态候选字段则在草稿归一化阶段完成 ID 解析。
+    testmode: input.testmode || config.defaultTestmode,
+    iteration_bug: input.iteration_bug || config.defaultIterationBug,
+    source: input.source || config.defaultSource
   };
   const workspaceId = String(normalizedInput.workspace_id || statePayload?.workspaceId || config.tapdWorkspaceId || '').trim();
   const title = ensureBugTitleModulePrefix(normalizedInput.title, normalizedInput.module_label || normalizedInput.module);
@@ -1672,12 +1676,26 @@ async function getTapdOptions(workspaceId, config) {
   if (config.mockTapd) {
     return {
       workspace_id: String(workspaceId),
-      version_report: [{ value: 'v1.2.0', label: 'v1.2.0' }],
+      version_report: [{ value: 'v1.3.0', label: 'v1.3.0' }],
       module: [{ value: '登录', label: '登录' }, { value: '企业知识中心', label: '企业知识中心' }],
-      iterations: [{ value: 'demo-iteration', label: '演示迭代' }],
+      iterations: [{ value: 'demo-iteration', label: '企业知识中心9月' }],
       release_plans: [{ value: 'demo-release', label: '演示发布计划' }],
+      priority: [{ value: '紧急', label: '紧急' }, { value: '高', label: '高' }, { value: '中', label: '中' }, { value: '低', label: '低' }],
+      severity: [{ value: 'fatal', label: '致命' }, { value: 'serious', label: '严重' }, { value: 'normal', label: '一般' }, { value: 'prompt', label: '提示' }, { value: 'advice', label: '建议' }],
+      source: [{ value: '代码问题', label: '代码问题' }, { value: '需求问题', label: '需求问题' }],
+      testmode: [{ value: '手工测试', label: '手工测试' }, { value: '自动化测试', label: '自动化测试' }],
+      iteration_bug: [{ value: '是', label: '是' }, { value: '否', label: '否' }],
       users: [{ value: 'demo-user', label: '演示用户（demo-user）' }],
-      warnings: []
+      warnings: [],
+      defaults: {
+        iteration: config.defaultIteration,
+        version_report: config.defaultVersionReport,
+        module: config.defaultModule,
+        priority: config.defaultPriorityLabel,
+        source: config.defaultSource,
+        testmode: config.defaultTestmode,
+        iteration_bug: config.defaultIterationBug
+      }
     };
   }
   const queryWorkspace = encodeURIComponent(String(workspaceId));
@@ -1712,13 +1730,37 @@ async function getTapdOptions(workspaceId, config) {
     }
   }
   const fieldData = fields?.data || {};
+  const priority = extractFieldOptions(fieldData, ['priority_label', 'priority'], [
+    { value: '紧急', label: '紧急' }, { value: '高', label: '高' }, { value: '中', label: '中' }, { value: '低', label: '低' }
+  ]);
+  const severity = extractFieldOptions(fieldData, ['severity', 'severity_level'], [
+    { value: 'fatal', label: '致命' }, { value: 'serious', label: '严重' }, { value: 'normal', label: '一般' }, { value: 'prompt', label: '提示' }, { value: 'advice', label: '建议' }
+  ]);
+  const source = extractFieldOptions(fieldData, ['source', 'bug_source', 'defect_source']);
+  const testmode = extractFieldOptions(fieldData, ['testmode', 'test_mode']);
+  const iterationBug = extractFieldOptions(fieldData, ['iteration_bug', 'iterationBug', 'iteration_requirement_bug']);
   return {
     workspace_id: String(workspaceId),
-    version_report: optionEntries(fieldData.version_report?.options),
-    module: optionEntries(fieldData.module?.options),
+    // 版本和模块通常是 TAPD 自定义字段，统一走兼容解析以适配对象/数组两种返回格式。
+    module: extractFieldOptions(fieldData, ['module']),
+    version_report: extractFieldOptions(fieldData, ['version_report', 'versionReport']),
     iterations: extractIterations(iterations),
     release_plans: releasePlans,
+    priority,
+    severity,
+    source,
+    testmode,
+    iteration_bug: iterationBug,
     users,
+    defaults: {
+      iteration: config.defaultIteration,
+      version_report: config.defaultVersionReport,
+      module: config.defaultModule,
+      priority: config.defaultPriorityLabel,
+      source: config.defaultSource,
+      testmode: config.defaultTestmode,
+      iteration_bug: config.defaultIterationBug
+    },
     warnings
   };
 }
