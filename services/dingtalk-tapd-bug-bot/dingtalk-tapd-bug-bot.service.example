@@ -1,0 +1,22 @@
+[Unit]
+Description=DingTalk to TAPD Bug Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dingtalkbot
+Group=dingtalkbot
+WorkingDirectory=/opt/dingtalk-tapd-bug-bot
+EnvironmentFile=-/etc/dingtalk-tapd-bug-bot.env
+ExecStart=/usr/bin/node /opt/dingtalk-tapd-bug-bot/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/dingtalk-tapd-bug-bot
+
+[Install]
+WantedBy=multi-user.target

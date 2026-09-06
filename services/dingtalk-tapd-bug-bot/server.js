@@ -436,8 +436,7 @@ function normalizeAgentDraft(raw, options, mediaLinks) {
     release_label: releaseOption?.label || pick(raw.release_id || raw.release_plan),
     confidence: Math.max(0, Math.min(1, Number(raw.confidence ?? 0.5) || 0.5)),
     notes: pick(raw.notes),
-    // Keep filePath in memory so the post-create TAPD attachment upload can read it.
-    // It is never rendered in card parameters or returned by an HTTP handler.
+    // 保留 filePath 供建单后上传 TAPD 附件；它不会进入卡片参数或 HTTP 响应。
     media: mediaLinks.map((media) => ({ ...media }))
   };
 }
@@ -727,7 +726,7 @@ async function processAgentBatch(batch, config) {
         interactiveSent = await createAndDeliverInteractiveDraft(storedDraft, config);
         console.log('[agent] interactive card delivered', Boolean(interactiveSent));
       } catch (error) {
-        // A malformed or stale card template should not discard the AI draft.
+        // 卡片模板损坏或过期时保留 AI 草稿，避免结果因展示层故障丢失。
         console.error('[agent] interactive card delivery failed; falling back to review link:', error.message);
       }
     }
@@ -779,7 +778,8 @@ async function processForwardedAgentEvent(request, body, config) {
       eventId: body.eventId,
       draftId,
       cardDelivered: Boolean(interactiveSent),
-      hasReviewUrl: Boolean(storedDraft.reviewUrl)
+      // 没有互动卡片时，运维日志中的 URL 是人工找回草稿的唯一入口。
+      reviewUrl: storedDraft.reviewUrl
     }));
   } catch (error) {
     await removeMedia(savedMedia, config);
@@ -1028,8 +1028,7 @@ async function handleCardCallback(request, response, config) {
             attachmentStatus: attachmentDetail
           }), config, draft.cardRecipient);
         } catch (error) {
-          // TAPD already contains the Bug; a card refresh failure must not
-          // turn a successful creation into a false "创建失败" state.
+          // TAPD 已经建单成功，卡片刷新失败不能把成功结果误报为“创建失败”。
           console.error('[card] success update failed:', error.message);
         }
       })
@@ -1627,8 +1626,7 @@ function toCardOptions(options) {
   return (options || []).map((option) => {
     const value = String(option?.value ?? '');
     const label = String(option?.label ?? value);
-    // The exported template declares selectOptions.text as a locale map. Keep
-    // key/value/label aliases as well because older copied templates use them.
+    // 导出模板把 selectOptions.text 定义为多语言映射；兼容旧模板仍保留 key/value/label 别名。
     return {
       key: value,
       value,
@@ -1695,7 +1693,7 @@ function buildInteractiveDraftParams(draft) {
   ];
   const users = draft.options?.users || [];
   const mediaPreview = cardMediaPreviewMarkdown(draft);
-  // Keep compatibility with the copied DingTalk template, which uses camelCase variables.
+  // 复制的钉钉模板使用 camelCase 变量，这里保留别名以兼容模板字段。
   return {
     ...params,
     cardTitle: params.title,
@@ -1796,9 +1794,8 @@ async function createAndDeliverInteractiveDraft(draft, config) {
       extension: { dynamicSummary: 'true' }
     }
   }, config);
-  // The instance is interactive as soon as delivery succeeds. Persist the
-  // correlation before the optional data refresh so callbacks can still find
-  // the draft if DingTalk reports a transient 5xx/system.busy on this PUT.
+  // 投递成功后卡片已经可交互；先保存关联关系，再做可选刷新，避免 DingTalk 的临时
+  // 5xx/system.busy 让回调无法找到草稿。
   draft.cardOutTrackId = outTrackId;
   draft.cardRecipient = String(recipient);
   try {
@@ -1821,14 +1818,12 @@ async function updateInteractiveCard(outTrackId, cardParams, config, recipient =
     cardData: { cardParamMap: cardParams },
     cardUpdateOptions: { updateCardDataByKey: true }
   };
-  // The delivered instance has recipient-scoped privateData. Update it too,
-  // otherwise stale private values can override the public cardData on clients.
+  // 已投递实例带有接收人私有数据，也必须同步更新，否则客户端可能被旧私有值覆盖。
   if (recipient) {
     payload.privateData = { [String(recipient)]: { cardParamMap: cardParams } };
     payload.cardUpdateOptions.updatePrivateDataByKey = true;
   }
-  // DingTalk can deliver several select callbacks while the user clicks quickly.
-  // Serialize updates per card so a slower stale request cannot overwrite a newer choice.
+  // 用户快速点击时 DingTalk 可能并发投递多个选择回调；按卡片串行更新，避免慢请求覆盖新选择。
   const previous = cardUpdateQueues.get(outTrackId) || Promise.resolve();
   let current;
   current = previous.catch(() => undefined)
@@ -2262,8 +2257,7 @@ async function handleDingTalkCallback(request, response, config) {
       ? buildDingTalkActionCard(formUrl, config.tapdWorkspaceId)
       : buildDingTalkMarkdown('TAPD Bug 机器人', ['请发送 `新建Bug` 开始建单。']));
 
-  // Returning the card is the callback reply. Sending it through sessionWebhook
-  // as well would display the same message twice in DingTalk.
+  // 直接返回卡片即可作为回调响应；再通过 sessionWebhook 发送会在钉钉中重复展示。
   return sendJson(response, 200, card);
 }
 

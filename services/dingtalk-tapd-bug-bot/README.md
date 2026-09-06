@@ -36,6 +36,10 @@ export OPENAI_API_MODE=responses
 node server.js
 ```
 
+服务器部署可将 `dingtalk-tapd-bug-bot.service.example` 安装为 systemd unit，再按实际安装
+目录调整 `WorkingDirectory`、`ExecStart` 和 `ReadWritePaths`。真实环境文件仍应放在
+`/etc/dingtalk-tapd-bug-bot.env`，不要复制到仓库。
+
 ## 2. 钉钉配置
 
 在钉钉企业内部机器人中配置 HTTP 消息接收地址：
@@ -102,7 +106,7 @@ Authorization: Bearer ACCESS_TOKEN
 
 接口收到合法事件后立即返回 `202 accepted`，后台完成 TAPD 字段读取、GPT 草稿和互动卡片
 投递。它不会绕过人工确认直接建单；若没有发送者 ID 或卡片配置，仍会保留可访问的草稿链接
-供排障。
+并写入服务日志，运维人员可从日志取得链接完成排障。
 
 ## 5. 上线前必须补强
 

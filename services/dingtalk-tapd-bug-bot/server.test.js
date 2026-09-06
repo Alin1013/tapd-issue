@@ -362,7 +362,8 @@ test('creates the Bug before uploading its media attachments', async () => {
   const tapdPaths = [];
   const tapd = http.createServer(async (request, response) => {
     tapdPaths.push(request.url);
-    for await (const _chunk of request) { /* drain request body */ }
+    // 消费请求体，避免测试服务器因未读取 body 而提前结束连接。
+    for await (const _chunk of request) { /* 消费请求体 */ }
     response.writeHead(200, { 'content-type': 'application/json' });
     if (request.url === '/bugs') {
       response.end(JSON.stringify({ status: 1, data: { Bug: { id: 'bug-1' } } }));
@@ -454,7 +455,8 @@ test('keeps draft correlation when the post-delivery card refresh is busy', asyn
   const calls = [];
   const server = http.createServer(async (request, response) => {
     calls.push(request.url);
-    for await (const _chunk of request) { /* drain request body */ }
+    // 消费请求体，确保测试只验证响应顺序而不受连接背压影响。
+    for await (const _chunk of request) { /* 消费请求体 */ }
     response.writeHead(request.url.endsWith('/instances') && request.method === 'PUT' ? 500 : 200, {
       'content-type': 'application/json'
     });

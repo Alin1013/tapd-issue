@@ -1,5 +1,6 @@
 # 运行时媒体和本地环境只留在服务器，不进入 Git。
 .env
 .env.*
+!.env.example
 media/
 *.log
