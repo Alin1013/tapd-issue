@@ -524,12 +524,14 @@ function normalizeAgentDraft(raw, options, mediaLinks) {
   const testmodeOption = allowed(options.testmode || [], raw.testmode) || allowed(options.testmode || [], options.defaults?.testmode);
   const iterationBugOption = allowed(options.iteration_bug || [], raw.iteration_bug || raw.iterationBug) || allowed(options.iteration_bug || [], options.defaults?.iteration_bug);
   const severityValues = new Set(['fatal', 'serious', 'normal', 'prompt', 'advice']);
-  const severity = severityOption?.value || (severityValues.has(pick(raw.severity, 'normal')) ? pick(raw.severity, 'normal') : 'normal');
+  const severity = options.severity?.length
+    ? (severityOption?.value || allowed(options.severity, 'normal')?.value || '')
+    : (severityOption?.value || (severityValues.has(pick(raw.severity, 'normal')) ? pick(raw.severity, 'normal') : 'normal'));
   const moduleLabel = moduleOption?.label || pick(raw.module);
   return {
     title: ensureBugTitleModulePrefix(pick(raw.title, '待确认：截图/视频问题'), moduleLabel),
     description: pick(raw.description || raw.actual, '请补充问题现象、复现步骤和期望结果。'),
-    priority_label: priorityOption?.value || pick(raw.priority_label, options.defaults?.priority || '中'),
+    priority_label: priorityOption?.value || (options.priority?.length ? '' : pick(raw.priority_label, options.defaults?.priority || '中')),
     severity,
     module: moduleOption?.value || '',
     module_label: moduleLabel,
@@ -539,11 +541,11 @@ function normalizeAgentDraft(raw, options, mediaLinks) {
     iteration_label: iterationOption?.label || pick(raw.iteration_id || raw.iteration),
     release_id: releaseOption?.value || '',
     release_label: releaseOption?.label || pick(raw.release_id || raw.release_plan),
-    source: sourceOption?.value || pick(raw.source || raw.bug_source),
+    source: sourceOption?.value || (options.source?.length ? '' : pick(raw.source || raw.bug_source)),
     source_label: sourceOption?.label || pick(raw.source || raw.bug_source),
-    testmode: testmodeOption?.value || pick(raw.testmode, options.defaults?.testmode),
+    testmode: testmodeOption?.value || (options.testmode?.length ? '' : pick(raw.testmode, options.defaults?.testmode)),
     testmode_label: testmodeOption?.label || pick(raw.testmode, options.defaults?.testmode),
-    iteration_bug: iterationBugOption?.value || pick(raw.iteration_bug || raw.iterationBug, options.defaults?.iteration_bug),
+    iteration_bug: iterationBugOption?.value || (options.iteration_bug?.length ? '' : pick(raw.iteration_bug || raw.iterationBug, options.defaults?.iteration_bug)),
     // 模型可以给出责任人候选，但真正写入 TAPD 前仍会经过服务端成员和白名单校验。
     current_owner: pick(raw.current_owner || raw.currentOwner || raw.owner || raw.handler),
     de: pick(raw.de || raw.developer),
