@@ -113,6 +113,7 @@ class AutomationConfig:
     group_name: str = "DeepWorks 产品交流群"
     workspace_id: str = "57379524"
     owner: str = "雷艾琳"
+    # 开发人由白名单按模块覆盖；测试人当前统一使用雷艾琳，便于后续集中更新。
     developer: str = ""
     tester: str = "雷艾琳"
     responsibility_whitelist: tuple[dict[str, Any], ...] = ()
