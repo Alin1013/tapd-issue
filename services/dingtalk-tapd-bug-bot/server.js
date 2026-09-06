@@ -1936,8 +1936,8 @@ async function notifyBugCreated(draft, result, payload, attachments, bugUrl, con
     draft.media?.length || 0,
     draft.senderName
   );
-  // 成功详情以 TAPD 为准，群内只发送跟踪提醒；空标题避免钉钉再次渲染“创建成功”标题。
-  const webhookPayload = { msgtype: 'markdown', markdown: { title: '', text } };
+  // 成功详情以 TAPD 为准，群内只发送跟踪提醒；空白标题满足钉钉字段约束且不渲染业务标题。
+  const webhookPayload = { msgtype: 'markdown', markdown: { title: ' ', text } };
   if (draft.senderStaffId) {
     webhookPayload.at = { atUserIds: [String(draft.senderStaffId)], isAtAll: false };
   }
@@ -1953,7 +1953,7 @@ async function notifyBugCreated(draft, result, payload, attachments, bugUrl, con
     robotCode: config.dingTalkRobotCode,
     openConversationId: draft.conversationId,
     msgKey: 'sampleMarkdown',
-    msgParam: JSON.stringify({ title: '', text }),
+    msgParam: JSON.stringify({ title: ' ', text }),
     atUserIds: draft.senderStaffId ? [String(draft.senderStaffId)] : [],
     userIdType: 1
   }, config);
