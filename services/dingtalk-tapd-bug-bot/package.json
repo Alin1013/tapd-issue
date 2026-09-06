@@ -1,0 +1,15 @@
+{
+  "name": "dingtalk-tapd-bug-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal DingTalk robot to TAPD bug creation service",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
