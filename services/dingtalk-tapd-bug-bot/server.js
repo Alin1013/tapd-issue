@@ -25,6 +25,13 @@ const AGENT_EVENT_DEDUPE_TTL_MS = 30 * 60 * 1000;
 const AGENT_TEXT_CONTEXT_TTL_MS = 2 * 60 * 1000;
 // 所有自动和手工入口共用该前缀，确保 TAPD 列表能按产品域和反馈来源检索。
 const DEFAULT_BUG_TITLE_PREFIX = '【企业知识中心—用户反馈】';
+// 企业知识中心模块默认由对应成员同时负责处理和开发；环境白名单可覆盖这些默认值。
+const DEFAULT_RESPONSIBILITY_WHITELIST = [
+  { matches: ['编译'], current_owner: '杨耀发', de: '杨耀发', te: '' },
+  { matches: ['抽取'], current_owner: '肖文杨', de: '肖文杨', te: '' },
+  { matches: ['本体'], current_owner: '肖文杨', de: '肖文杨', te: '' },
+  { matches: ['对话部分', '对话'], current_owner: '杨耀发', de: '杨耀发', te: '' }
+];
 const execFileAsync = promisify(execFile);
 
 const MEDIA_TYPES = new Map([
@@ -111,7 +118,11 @@ function parseResponsibilityWhitelist(rawValue) {
    * 这样后续补充责任人时只需更新密钥管理中的 JSON，不需要修改代码或重新确认卡片。
    */
   const source = String(rawValue || '').trim();
-  if (!source) return [];
+  if (!source) return DEFAULT_RESPONSIBILITY_WHITELIST.map((rule) => ({
+    ...rule,
+    matches: [...rule.matches],
+    defaultRule: false
+  }));
   let parsed;
   try {
     parsed = JSON.parse(source);

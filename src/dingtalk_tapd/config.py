@@ -105,6 +105,15 @@ def _parse_responsibility_whitelist(raw_value: str) -> tuple[dict[str, Any], ...
     return tuple(normalized)
 
 
+# 企业知识中心常见模块的默认分工；环境变量白名单有值时可覆盖这组规则。
+DEFAULT_RESPONSIBILITY_WHITELIST: tuple[dict[str, Any], ...] = (
+    {"matches": ("编译",), "owner": "杨耀发", "developer": "杨耀发", "tester": "", "default": False},
+    {"matches": ("抽取",), "owner": "肖文杨", "developer": "肖文杨", "tester": "", "default": False},
+    {"matches": ("本体",), "owner": "肖文杨", "developer": "肖文杨", "tester": "", "default": False},
+    {"matches": ("对话部分", "对话"), "owner": "杨耀发", "developer": "杨耀发", "tester": "", "default": False},
+)
+
+
 # 默认保留历史目标群，并把新建的测试群加入同一套自动建单监听。
 DEFAULT_AUTOMATION_GROUPS: tuple[tuple[str, str], ...] = (
     ("cid3SbKZNiotRpk9RdlluSUSA==", "DeepWorks 产品交流群"),
@@ -174,7 +183,7 @@ class AutomationConfig:
     # 开发人由白名单按模块覆盖；测试人当前统一使用雷艾琳，便于后续集中更新。
     developer: str = ""
     tester: str = "雷艾琳"
-    responsibility_whitelist: tuple[dict[str, Any], ...] = ()
+    responsibility_whitelist: tuple[dict[str, Any], ...] = DEFAULT_RESPONSIBILITY_WHITELIST
     title_prefix: str = "【企业知识中心—用户反馈】"
     state_db: str = ".dingtalk-tapd/state.sqlite3"
     attachment_dir: str = ".dingtalk-tapd/attachments"
@@ -293,8 +302,11 @@ class AutomationConfig:
             owner=os.getenv("DINGTALK_TAPD_OWNER", defaults.owner).strip(),
             developer=os.getenv("DINGTALK_TAPD_DEVELOPER", defaults.developer).strip(),
             tester=os.getenv("DINGTALK_TAPD_TESTER", defaults.tester).strip() or defaults.tester,
-            responsibility_whitelist=_parse_responsibility_whitelist(
-                os.getenv("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST", "")
+            # 未配置环境变量时启用产品默认分工；显式传入 JSON（包括 []）仍可完全接管规则。
+            responsibility_whitelist=(
+                _parse_responsibility_whitelist(raw_responsibility)
+                if (raw_responsibility := os.getenv("DINGTALK_TAPD_RESPONSIBILITY_WHITELIST", "").strip())
+                else defaults.responsibility_whitelist
             ),
             title_prefix=os.getenv("DINGTALK_TAPD_TITLE_PREFIX", defaults.title_prefix),
             state_db=os.getenv("DINGTALK_TAPD_STATE_DB", defaults.state_db).strip(),

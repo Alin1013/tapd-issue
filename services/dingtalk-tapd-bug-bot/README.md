@@ -126,7 +126,7 @@ Authorization: Bearer ACCESS_TOKEN
 - 优先级、严重程度、缺陷根源、测试方式和迭代需求缺陷均优先读取 TAPD 字段配置候选，再由模型按问题内容选择合法值；缺陷根源可通过 `TAPD_DEFAULT_SOURCE` 设置兜底值。
 - “处理人”从 TAPD `/workspaces/users` 动态加载，界面显示姓名和账号，提交时写入 TAPD 需要的 `current_owner` 用户名。
 - “处理人”支持输入姓名/账号并从下拉候选中选择；服务端使用钉钉 `msgId` 在短时间窗口内去重，避免重复回复卡片。
-- 自动模式按 AI 解析出的模块、标题和描述匹配 `TAPD_RESPONSIBILITY_WHITELIST`，并将处理人/开发人解析为 TAPD 项目成员账号；未命中时使用 `TAPD_DEFAULT_OWNER` 和 `TAPD_DEFAULT_DEVELOPER`。当前所有自动建单的测试人统一为 `TAPD_DEFAULT_TESTER`（默认 `雷艾琳`）。
+- 自动模式按 AI 解析出的模块、标题和描述匹配责任规则；默认编译/对话部分分配给杨耀发，抽取/本体分配给肖文杨，并将处理人/开发人解析为 TAPD 项目成员账号。配置 `TAPD_RESPONSIBILITY_WHITELIST` 后覆盖默认分工，未命中时使用 `TAPD_DEFAULT_OWNER` 和 `TAPD_DEFAULT_DEVELOPER`。当前所有自动建单的测试人统一为 `TAPD_DEFAULT_TESTER`（默认 `雷艾琳`）。
 - 当前表单不展示“发现阶段”“软件平台”；“发布计划”可从 TAPD 动态读取并选择。
 - 当前媒体链接是随机文件名但未接入登录鉴权，仅适合内网/PoC；正式环境应使用固定域名、对象存储和带签名的访问链接。
 - 钉钉图片/视频回调中的 `downloadCode` 需要通过钉钉文件下载接口换取临时下载地址；企业应用需要 `DINGTALK_APP_KEY` 和对应 Secret（默认复用 `DINGTALK_CLIENT_SECRET`）。

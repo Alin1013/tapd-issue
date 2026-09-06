@@ -37,6 +37,7 @@ dingtalk-tapd listen
 监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。`listen` 会读取目标群全部消息，再按正文/OCR 内容筛选企业知识中心、知识库或知识管理主题；需要只接收 @机器人的桥接场景请使用 `agent-listen`。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。
 
 - 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
+- 解析出功能模块后按默认分工设置处理人和开发人：编译→杨耀发、抽取→肖文杨、本体→肖文杨、对话部分→杨耀发；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；
 - 生成 `【企业知识中心—用户反馈】问题描述` 标题；
 - 用 `+messages-mget --download-resources` 下载截图/附件，在描述中保留本地路径、资源 ID、消息 ID 和下载失败原因；
