@@ -47,8 +47,19 @@ class EventStore:
 
         return datetime.now(timezone.utc).isoformat()
 
-    def claim(self, event_key: str) -> bool:
-        """尝试占有事件；任何已有状态都不再次建单，保障写入幂等。"""
+    def claim(
+        self,
+        event_key: str,
+        *,
+        retry_failed: bool = False,
+        retryable_error_prefixes: tuple[str, ...] = (),
+    ) -> bool:
+        """尝试占有事件；仅按调用方白名单重试写入前失败记录。
+
+        默认路径仍拒绝任何已存在事件，避免重复创建 TAPD 工单。补偿路径要求
+        同时显式开启 ``retry_failed`` 和提供错误前缀白名单，并用 SQLite 的条件
+        UPDATE 保证并发进程中只有一个补偿者可以重新占有该事件。
+        """
 
         if not event_key.strip():
             raise ValueError("event_key 不能为空")
@@ -56,7 +67,25 @@ class EventStore:
             "INSERT OR IGNORE INTO events(event_key, status, updated_at) VALUES (?, 'processing', ?)",
             (event_key, self._now()),
         )
-        return cursor.rowcount == 1
+        if cursor.rowcount == 1:
+            return True
+        if not retry_failed or not retryable_error_prefixes:
+            return False
+
+        # 只有已知的写入前校验错误允许补偿；create_bug 的未知失败永不自动重试。
+        clauses = " OR ".join("error LIKE ?" for _ in retryable_error_prefixes)
+        parameters = (self._now(), event_key, *(f"{prefix}%" for prefix in retryable_error_prefixes))
+        retry_cursor = self._connection.execute(
+            f"""
+            UPDATE events
+               SET status = 'processing', error = NULL, updated_at = ?
+             WHERE event_key = ?
+               AND status = 'failed'
+               AND ({clauses})
+            """,
+            parameters,
+        )
+        return retry_cursor.rowcount == 1
 
     def mark_ignored(self, event_key: str, reason: str) -> None:
         """记录不相关事件的原因，防止同一事件反复分析。"""

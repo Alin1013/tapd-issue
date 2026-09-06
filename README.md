@@ -53,6 +53,17 @@ dingtalk-tapd sync \
   --end "2026-09-05T00:00:00+08:00"
 ```
 
+如果此前因为 TAPD workspace 或字段只读校验失败，可在凭据修复后显式补偿：
+
+```bash
+dingtalk-tapd sync \
+  --start "2026-09-04T00:00:00+08:00" \
+  --end "2026-09-06T00:00:00+08:00" \
+  --retry-failed
+```
+
+`--retry-failed` 只允许重试已知的写入前校验错误；`create_bug` 返回未知结果的事件仍保持幂等保护，不会自动重试。
+
 同步结果为 partial 时默认只输出完整性告警、不自动写入；确认时间范围后可显式加 `--allow-partial`。
 
 高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`（逗号分隔，默认 `董超,买年顺`）、`DINGTALK_TAPD_MENTION_TARGET_IDS`（可选的 `userId/openDingTalkId`，逗号分隔）。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
@@ -101,4 +112,4 @@ dingtalk-tapd create \
 - DWS 分页缺少 `complete=true`、存在 `hasMore` 或 `failures` 时结果会标记为 partial。
 - 手动 `create` 没有 `--confirm` 时不会调用 TAPD 创建接口；`listen` 和 `sync` 只在目标群消息被分析为企业知识中心相关内容后自动写入。
 - 令牌只从环境变量读取，不写入 JSON 输出、日志或仓库。
-- `listen` 和 `sync` 的事件状态、去重键持久化在 `.dingtalk-tapd/state.sqlite3`；写入结果未知时标记为失败供人工排查，不自动重试。
+- `listen` 和 `sync` 的事件状态、去重键持久化在 `.dingtalk-tapd/state.sqlite3`；写入结果未知时标记为失败供人工排查，不自动重试，只有显式 `--retry-failed` 才会补偿已知的写入前校验失败。

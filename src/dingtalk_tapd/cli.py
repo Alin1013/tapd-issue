@@ -62,6 +62,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--end", help="ISO 8601 结束时间")
     sync.add_argument("--order", choices=("asc", "desc"), default="desc")
     sync.add_argument("--allow-partial", action="store_true", help="允许使用 partial 同步结果自动建单")
+    sync.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="仅重试已知的 TAPD 写入前校验失败事件，不重试未知写入失败",
+    )
     return parser
 
 
@@ -170,6 +175,7 @@ def _sync(workflow: Workflow, args: argparse.Namespace) -> int:
             end=args.end,
             order=args.order,
             allow_partial=args.allow_partial,
+            retry_failed=args.retry_failed,
         )
         _json_print(report.as_dict())
         return 2 if report.blocked_reason else 0

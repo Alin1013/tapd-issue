@@ -23,6 +23,14 @@ from .store import EventStore
 
 logger = logging.getLogger(__name__)
 
+# 这些错误发生在 confirmation_context 的只读校验阶段，尚未调用 create_bug；
+# 只对白名单错误开放补偿，避免把未知写入结果重试成重复 TAPD 工单。
+RETRYABLE_PREWRITE_FAILURE_PREFIXES = (
+    "TAPD MCP 工具 get_workspace_info 返回业务错误",
+    "TAPD MCP 工具 get_entity_custom_fields 返回业务错误",
+    "TAPD 自定义字段未在配置中找到:",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class IssueAnalysis:
@@ -305,7 +313,7 @@ class AutoIssueService:
         self.analyzer = IssueAnalyzer(config)
         self.store = EventStore(config.state_db)
 
-    def process(self, event: RealtimeEvent) -> AutomationOutcome:
+    def process(self, event: RealtimeEvent, *, retry_failed: bool = False) -> AutomationOutcome:
         """过滤目标群和主题，完成一次有幂等保护的自动建单。"""
 
         event_key = f"{event.conversation_id}:{event.message_id}"
@@ -313,7 +321,11 @@ class AutoIssueService:
             return AutomationOutcome("ignored", event_key, event.message_id, error="非目标 DeepWorks 群")
         if not event.is_automation_trigger(self.config.mention_targets, self.config.mention_target_ids):
             return AutomationOutcome("ignored", event_key, event.message_id, error="未 @ 自动建单对象")
-        if not self.store.claim(event_key):
+        if not self.store.claim(
+            event_key,
+            retry_failed=retry_failed,
+            retryable_error_prefixes=RETRYABLE_PREWRITE_FAILURE_PREFIXES,
+        ):
             return AutomationOutcome("duplicate", event_key, event.message_id, error="事件已处理")
 
         downloads: tuple[ResourceDownload, ...] = ()
@@ -384,6 +396,7 @@ class AutoIssueService:
         end: str | None = None,
         order: str = "desc",
         allow_partial: bool = False,
+        retry_failed: bool = False,
     ) -> HistorySyncReport:
         """扫描目标群历史消息；没有 @ 时仍按企业知识中心关键词自动建单。"""
 
@@ -396,7 +409,10 @@ class AutoIssueService:
                 "同步结果为 partial；请缩小时间范围或显式使用 --allow-partial",
             )
         # 同步与实时事件共享 process 和 EventStore，因此同一消息只会产生一个 TAPD 工单。
-        outcomes = tuple(self.process(RealtimeEvent.from_message(message)) for message in result.messages)
+        outcomes = tuple(
+            self.process(RealtimeEvent.from_message(message), retry_failed=retry_failed)
+            for message in result.messages
+        )
         return HistorySyncReport(result, outcomes)
 
     def _verify(self, tapd_id: str | None) -> str | None:
