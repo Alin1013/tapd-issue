@@ -13,6 +13,8 @@ WorkingDirectory=/var/lib/dingtalk-tapd
 Environment=HOME=/var/lib/dingtalk-tapd
 EnvironmentFile=/etc/dingtalk-tapd-listen.env
 ExecStart=/opt/dingtalk-tapd/.venv/bin/dingtalk-tapd listen
+# 消息来源账本和下载附件属于业务数据，新文件默认不允许其他系统用户读取。
+UMask=0027
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
