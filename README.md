@@ -1,11 +1,12 @@
 # Dingtalk TAPD Bridge
 
-这是一个围绕设计文档实现的 Python CLI，用于把钉钉 DWS 中的问题消息整理为 TAPD 缺陷、需求或任务。`search`、`draft`、`create` 仍保持读取和写入分层；`listen` 监听目标群消息并自动写入，`sync` 用于补扫没有 @ 的历史聊天记录。两条自动入口都把钉钉 `messageId` 和会话 ID 写入工单来源；`sync` 另外在报告中保留分页完整性账本。
+这是一个围绕设计文档实现的 DWS→TAPD 桥接项目。Python CLI 负责群消息读取、主题筛选、来源追踪和自动建单；Node Bug Agent 负责钉钉机器人回调、媒体分析、责任人校验和 TAPD 写入。`search`、`draft`、`create` 保持读取与写入分层；`listen`、`sync` 和 `agent-listen` 提供实时、历史和远端桥接入口。
 
 ## 文档导航
 
 - [配置说明](docs/configuration.md)：环境变量、权限、数据生命周期和二次开发入口。
 - [操作手册](docs/operations.md)：安装验证、手工建单、自动监听、远端 Agent、systemd 运维和故障排查。
+- [当前内容总览](docs/current-state.md)：当前能力、默认业务口径、状态语义和已知边界。
 
 ## 安装
 
@@ -34,14 +35,13 @@ export TAPD_API_PASSWORD=...
 dingtalk-tapd listen
 ```
 
-监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。`listen` 会读取目标群全部消息，再按正文/OCR 内容筛选企业知识中心、知识库或知识管理主题；需要只接收 @机器人的桥接场景请使用 `agent-listen`。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。
+监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。`listen` 会读取目标群全部消息，再按正文/OCR 内容筛选企业知识中心、知识库或知识管理主题；只接收 @缺陷机器人的桥接场景请使用 `agent-listen`。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。
 
-- 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
-- 解析出功能模块后按默认分工设置处理人和开发人：编译→杨耀发、抽取→肖文杨、本体→肖文杨、对话部分→杨耀发；
+- 使用 TAPD 项目 `57379524`，自动工单类型固定为 Bug；未命中模块责任规则时负责人回退为 `雷艾琳`；解析出功能模块后按默认分工设置处理人和开发人：编译→杨耀发、抽取→肖文杨、本体→肖文杨、对话部分→杨耀发；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；
 - 生成 `【企业知识中心—用户反馈】问题描述` 标题；
 - 用 `+messages-mget --download-resources` 下载截图/附件，在描述中保留本地路径、资源 ID、消息 ID 和下载失败原因；
-- 对本地图片尝试使用系统 `tesseract` 做 OCR。没有中文语言包或视觉分析器时，会明确标注“原图待查看”，不会虚构截图内容；
+- 对本地图片尝试使用系统 `tesseract` 做 OCR（默认 `eng`，可通过 `DINGTALK_TAPD_OCR_COMMAND` 自定义）。OCR 或下载失败时会明确标注原图待查看，不会虚构截图内容；
 - 以 `conversationId:messageId` 写入 `.dingtalk-tapd/state.sqlite3`，同一消息只建一次工单。
 
 可用边界参数控制监听生命周期：
@@ -91,14 +91,16 @@ export DINGTALK_TAPD_AGENT_SECRET="与远端 AGENT_INGEST_SECRET 相同的随机
 dingtalk-tapd agent-listen --max-events 1
 ```
 
-`agent-listen` 只负责监听、下载并签名转发消息；远端服务继续执行 GPT-5.6-sol 分析、责任人
+`agent-listen` 只负责监听、下载并签名转发消息；远端服务继续执行配置的模型（默认 `gpt-5.6-sol`）分析、责任人
 白名单匹配和 TAPD Bug 创建。媒体以受限 data URI 转发，不会把本地路径或 TAPD
 凭据发送到监听器以外的地方。远端返回 `duplicate` 时表示同一
 `conversationId:messageId` 已经处理，不会重复提单。
 
 远端服务需配置 `AGENT_INGEST_SECRET`，并把钉钉机器人加入目标群、配置 `/dingtalk/callback`
-回调；默认不需要卡片确认，成功结果会直接回群。设置 `TAPD_AUTO_CREATE_BUGS=false` 时，卡片确认仍由 `/dingtalk/card-callback` 处理。`agent-listen` 只订阅目标群并放行
-`@缺陷机器人`，互动卡片统一私投给 `DINGTALK_CARD_REVIEW_RECIPIENT_ID`（当前为雷艾琳），不会私投给提问人。若没有 `senderStaffId`，服务仍可投卡，但群内 @ 提问人的成功通知需要改用原生回调补齐稳定 ID。
+回调；默认不需要卡片确认，成功结果会通过临时 `sessionWebhook` 或机器人群消息 API 回传，并在有稳定
+`senderStaffId` 时 @ 提问人。设置 `TAPD_AUTO_CREATE_BUGS=false` 时，卡片确认仍由
+`/dingtalk/card-callback` 处理。`agent-listen` 只订阅目标群并放行 `@缺陷机器人`，互动卡片统一私投给
+`DINGTALK_CARD_REVIEW_RECIPIENT_ID`（默认是雷艾琳），不会私投给提问人。
 
 监听器的高级配置：`DINGTALK_TAPD_AGENT_TIMEOUT`（默认 30 秒）。公网地址和共享密钥只放
 在 systemd/环境变量中，不要写进 Git 或 README 实例值。

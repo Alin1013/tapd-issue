@@ -1,6 +1,20 @@
 # Dingtalk TAPD Bridge 操作手册
 
-本文按实际操作顺序编写。推荐先用一条测试消息完成只读验证，再开启自动监听；只有关闭自动模式时才需要人工确认建单。
+本文按实际操作顺序编写。推荐先用一条测试消息完成只读验证，再开启自动监听；只有将 Node 的 `TAPD_AUTO_CREATE_BUGS` 设为 `false` 时才需要人工确认建单。完整能力和默认业务口径见 [当前内容总览](current-state.md)。
+
+## 0. 先选正确入口
+
+| 场景 | 命令/入口 | 是否要求 @ | 是否直接写 TAPD |
+| --- | --- | --- | --- |
+| 查找消息，不产生副作用 | `search` | 否 | 否 |
+| 只生成草稿 | `draft` | 否 | 否 |
+| 人工确认后建单 | `create` | 否 | 仅 `--confirm` |
+| 目标群实时内容扫描 | `listen` | 否 | 是，命中主题后自动建 Bug |
+| 目标群历史补扫 | `sync` | 否 | 是；`partial` 默认阻断 |
+| @缺陷机器人并交给 Node | `agent-listen` | 是，默认 `@缺陷机器人` | 由 Node 按 `TAPD_AUTO_CREATE_BUGS` 决定 |
+| 打开 Node 手工表单 | `http(s)://<host>/` | 否 | 提交表单即写入 |
+
+自动流程的默认项目、标题、优先级和责任人规则以 [当前内容总览](current-state.md) 为准；修改前先确认环境变量是否覆盖了默认值。
 
 ## 1. 启动前检查
 
@@ -111,13 +125,15 @@ dingtalk-tapd create \
 dingtalk-tapd listen --max-events 1
 ```
 
-确认 JSON 结果为 `created` 后再常驻：
+确认 JSON 结果出现预期的 `created`（相关消息）后再常驻；`ignored` 表示非目标主题，`duplicate` 表示事件已处理，`failed` 需要查看错误并人工排查：
 
 ```bash
 dingtalk-tapd listen
 # 或限定本次运行时长
 dingtalk-tapd listen --duration 10m
 ```
+
+`--max-events` 统计监听器接收的去重事件，不等于成功创建的 Bug 数量。临时验证结束后可按 `Ctrl-C` 停止进程；DWS 子订阅会先尝试正常关闭。
 
 实时监听订阅每个目标群的全部消息，不要求消息带 @；通过后，程序会：
 
@@ -176,7 +192,7 @@ dingtalk-tapd agent-listen --max-events 1
 dingtalk-tapd agent-listen
 ```
 
-监听器负责 DWS 事件过滤、附件下载和 HMAC 签名；它不会携带 TAPD 凭据，也不会直接创建 TAPD Bug。服务端收到事件后返回 `202 accepted`，后台完成模型分析、责任人匹配和后续建单。
+监听器负责 DWS 事件过滤、附件下载和 HMAC 签名；它不会携带 TAPD 凭据，也不会直接创建 TAPD Bug。服务端收到事件后立即返回 `202 accepted`，后台完成模型分析、责任人匹配和后续建单；重复的 `eventId` 返回 `duplicate`。
 
 ### 服务端端到端流程
 
@@ -186,9 +202,9 @@ dingtalk-tapd agent-listen
 4. 按 `TAPD_RESPONSIBILITY_WHITELIST` 解析负责人、开发人和测试人，并校验项目成员账号。
 5. 默认 `TAPD_AUTO_CREATE_BUGS=true`：直接调用 TAPD `/bugs`，再逐个上传附件。
 6. `TAPD_AUTO_CREATE_BUGS=false`：投递互动卡片；卡片未配置或投递失败时，回退到 `/draft/{id}` 草稿链接，等待人工确认。
-7. 通过临时 `sessionWebhook` 或机器人群消息 API 回传 Bug ID 和链接。
+7. 自动建单成功后，通过临时 `sessionWebhook` 或机器人群消息 API 回传统一成功提醒；有 `senderStaffId` 时会 @ 提问人。建单成功但通知失败只记日志，不会因重试通知而重复创建 Bug。
 
-自动模式不会等待卡片确认；人工模式的草稿默认 30 分钟过期，服务重启会清空尚未确认的草稿。
+自动模式不会等待卡片确认；人工模式的草稿默认 30 分钟过期，服务重启会清空尚未确认的草稿。Node 的自动建单也会先读取 TAPD 动态字段并校验责任人，附件上传失败不会回滚已经创建的 Bug。
 
 ## 5. Node H5 与互动卡片
 
@@ -271,3 +287,14 @@ sudo /opt/dingtalk-tapd-bug-bot/configure-bug-agent.sh
 - 修改回调、卡片或签名逻辑后，同时检查 `/healthz`、`/api/agent/status` 和一条实际钉钉回调。
 - 新增外部写接口时保留自动模式的责任白名单、来源 ID、幂等键和错误可见性；人工回退模式继续保留确认门禁，不要把未知写入结果自动重试。
 - 生产发布前确认环境文件权限、HTTPS、日志脱敏、媒体目录清理和 systemd 自动重启状态。
+
+## 9. 一次完整验收
+
+每次首次部署或修改关键配置后，按以下顺序验收，避免直接用真实历史批量写入：
+
+1. `dws auth status`、`which dws`、`uvx mcp-server-tapd --help`，确认本地依赖和登录状态。
+2. `dingtalk-tapd search` 验证群名唯一、时间范围和 `integrity`；必要时再执行 `draft`。
+3. Node 执行 `node --check server.js`，启动后检查 `/healthz` 和 `/api/agent/status`。
+4. 本地流程用 `listen --max-events 1`；桥接流程用 `agent-listen --max-events 1`，确认 @ 目标、媒体和返回状态。
+5. Node 本地流程先用 `MOCK_TAPD=true`；真实 TAPD 只发送一条明确测试消息，核对责任人、标题、来源和附件。
+6. 确认成功通知可回到会话/目标群，并检查 `journalctl` 中没有凭据、完整媒体 data URI 或内部路径泄漏。

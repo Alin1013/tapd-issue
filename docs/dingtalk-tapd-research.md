@@ -4,13 +4,28 @@
 
 ## 结论
 
-**可以通过 Codex 的自然语言完成这条流程，但两个项目之间没有现成的内置连接器。** 推荐的边界是：
+**可以通过 Codex 的自然语言完成这条流程，仓库当前还提供了可独立运行的自动化桥接实现。** 推荐的边界是：
 
 1. `dws` 负责钉钉认证、群名解析和聊天消息查询；DWS 的 `dingtalk-chat` Skill 会把这些 CLI 能力暴露给 Agent。
 2. `mcp-server-tapd` 作为独立 MCP Server 负责 TAPD 项目解析、字段查询和创建需求/任务/缺陷。
 3. Codex 读取 DWS 的 JSON 结果，整理问题事实，在写 TAPD 前向用户确认目标项目、工单类型和字段，然后调用 TAPD MCP 的写工具。
 
-因此，“一次交互中自然语言找群聊并建单”可行；“无人确认、定时持续扫描并去重建单”还需要额外的调度、事件监听和幂等存储，本次两个仓库没有直接提供完整方案。
+因此，“一次交互中自然语言找群聊并建单”可行；本仓库已经补充 `listen`、`sync`、`agent-listen`、SQLite 事件账本和 Node Bug Agent，用于无人确认的实时/历史扫描与远端桥接。它们是本项目自己的编排层，不属于 DWS 或 TAPD MCP 的内置能力。
+
+## 与当前仓库实现的关系
+
+本报告最初记录的是 DWS CLI 与 TAPD MCP 的原始能力边界；当前仓库在此之上增加了以下运行层：
+
+| 原始能力 | 当前编排 |
+| --- | --- |
+| DWS 群搜索、消息搜索、历史消息 | Python `search`、`listen`、`sync`，并按稳定 `conversationId` 过滤目标群 |
+| TAPD 读取、字段查询、写入和核对 | `draft`/`create` 的确认流程，以及自动入口的写前校验和写后核对 |
+| 消息来源字段 | 自动描述保留群名、`conversationId`、`messageId`、发送者、时间和资源信息 |
+| 持续扫描与去重 | `listen`/`sync` 使用 `.dingtalk-tapd/state.sqlite3`；未知写入结果不自动重试 |
+| 媒体和模型分析 | Python 下载/OCR，或 Node Bug Agent 下载媒体、抽取视频帧并调用配置的 OpenAI 兼容模型 |
+| 跨进程连接 | `agent-listen` 通过 `x-agent-timestamp`/`x-agent-signature` HMAC 调用 Node `/api/agent/events` |
+
+当前默认业务口径、命令选择和已知边界集中在 [当前内容总览](current-state.md)；部署操作见 [操作手册](operations.md)。
 
 ## 官方来源
 
