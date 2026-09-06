@@ -9,11 +9,9 @@ import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
 from .config import AutomationConfig
 from .models import DingTalkGroup, IssueDraft, IssueType, SearchResult, SourceReference
@@ -79,20 +77,26 @@ class HistorySyncReport:
     result: SearchResult
     outcomes: tuple[AutomationOutcome, ...]
     blocked_reason: str | None = None
+    additional_results: tuple[SearchResult, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """输出同步计数、逐消息结果和完整性账本。"""
 
+        results = (self.result, *self.additional_results)
         statuses = {
             status: sum(outcome.status == status for outcome in self.outcomes)
             for status in ("created", "ignored", "duplicate", "failed")
         }
         return {
-            "messageCount": len(self.result.messages),
+            "messageCount": sum(len(result.messages) for result in results),
             "processed": len(self.outcomes),
             "counts": statuses,
             "blockedReason": self.blocked_reason,
-            "integrity": pagination_ledger_to_dict(self.result.ledger),
+            "integrity": (
+                pagination_ledger_to_dict(self.result.ledger)
+                if len(results) == 1
+                else [pagination_ledger_to_dict(result.ledger) for result in results]
+            ),
             "outcomes": [outcome.as_dict() for outcome in self.outcomes],
         }
 
@@ -173,7 +177,8 @@ class IssueAnalyzer:
         summary = self._summary(combined, bool(downloads))
         priority = self._priority(combined)
         media = _direct_media((*event.resource_refs, *(download.url or "" for download in downloads)))
-        description = self._description(event, downloads, ocr_text, combined, self.config.group_name)
+        group_name = self.config.group_name_for(event.conversation_id) or self.config.group_name
+        description = self._description(event, downloads, ocr_text, combined, group_name)
         return IssueAnalysis(relevant, summary, priority, ocr_text, media, description)
 
     def _summary(self, combined: str, has_attachments: bool) -> str:
@@ -339,8 +344,9 @@ class AutoIssueService:
         """过滤目标群和主题，完成一次有幂等保护的自动建单。"""
 
         event_key = f"{event.conversation_id}:{event.message_id}"
-        if event.conversation_id != self.config.group_id:
-            return AutomationOutcome("ignored", event_key, event.message_id, error="非目标 DeepWorks 群")
+        if not self.config.is_target_group(event.conversation_id):
+            # 群名只用于可读提示，实际过滤始终使用不可变的 openConversationId。
+            return AutomationOutcome("ignored", event_key, event.message_id, error="非目标群")
         if not event.is_automation_trigger(self.config.mention_targets, self.config.mention_target_ids):
             return AutomationOutcome("ignored", event_key, event.message_id, error="未 @ 自动建单对象")
         if not self.store.claim(
@@ -365,7 +371,8 @@ class AutoIssueService:
             self.store.mark_ignored(event_key, "与企业知识中心无关")
             return AutomationOutcome("ignored", event_key, event.message_id, error="与企业知识中心无关")
 
-        title = f"{self.config.title_prefix}{analysis.summary}-{_timestamp()}"
+        # 标题前缀固定表达产品域和来源，后面直接拼接 AI 提炼的问题描述，便于 TAPD 检索。
+        title = f"{self.config.title_prefix}{analysis.summary}"
         description = analysis.description
         if detail_error:
             description += f"\n\n## 处理告警\n- {detail_error}"
@@ -431,20 +438,25 @@ class AutoIssueService:
     ) -> HistorySyncReport:
         """扫描目标群历史消息；没有 @ 时仍按企业知识中心关键词自动建单。"""
 
-        group = DingTalkGroup(self.config.group_name, self.config.group_id)
-        result = self.workflow.dws.list_group_messages(group, start=start, end=end, order=order)
-        if result.is_partial and not allow_partial:
-            return HistorySyncReport(
-                result,
-                (),
-                "同步结果为 partial；请缩小时间范围或显式使用 --allow-partial",
+        results: list[SearchResult] = []
+        outcomes: list[AutomationOutcome] = []
+        blocked_reasons: list[str] = []
+        for group_id, group_name in self.config.configured_groups():
+            group = DingTalkGroup(group_name, group_id)
+            result = self.workflow.dws.list_group_messages(group, start=start, end=end, order=order)
+            results.append(result)
+            if result.is_partial and not allow_partial:
+                blocked_reasons.append(f"群“{group_name}”同步结果为 partial")
+                continue
+            # 同步与实时事件共享 process 和 EventStore，因此同一消息只会产生一个 TAPD 工单。
+            outcomes.extend(
+                self.process(RealtimeEvent.from_message(message), retry_failed=retry_failed)
+                for message in result.messages
             )
-        # 同步与实时事件共享 process 和 EventStore，因此同一消息只会产生一个 TAPD 工单。
-        outcomes = tuple(
-            self.process(RealtimeEvent.from_message(message), retry_failed=retry_failed)
-            for message in result.messages
-        )
-        return HistorySyncReport(result, outcomes)
+        if not results:
+            raise ValueError("至少需要配置一个目标群")
+        blocked_reason = "；".join(blocked_reasons) + "；请缩小时间范围或显式使用 --allow-partial" if blocked_reasons else None
+        return HistorySyncReport(results[0], tuple(outcomes), blocked_reason, tuple(results[1:]))
 
     def _verify(self, tapd_id: str | None) -> str | None:
         """写入后调用可用的 get_bug；无法提取 ID 时返回解释而不阻断已完成写入。"""
@@ -464,9 +476,3 @@ class AutoIssueService:
         """关闭幂等账本连接。"""
 
         self.store.close()
-
-
-def _timestamp() -> str:
-    """使用用户所在的中国时区生成可读时间戳，避免服务器 UTC 造成标题错日。"""
-
-    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")

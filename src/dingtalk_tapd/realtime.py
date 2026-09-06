@@ -269,6 +269,7 @@ class RealtimeEventListener:
         mention_targets: Sequence[str] | None = None,
         mention_target_ids: Sequence[str] | None = None,
         include_at_me: bool = True,
+        group_id: str | None = None,
     ) -> None:
         self.config = config
         self.automation = automation
@@ -278,6 +279,8 @@ class RealtimeEventListener:
         self.mention_targets = tuple(mention_targets) if mention_targets is not None else automation.mention_targets
         self.mention_target_ids = tuple(mention_target_ids) if mention_target_ids is not None else automation.mention_target_ids
         self.include_at_me = include_at_me
+        # 多群兼容由 CLI 为每个 openConversationId 建立独立订阅，避免 DWS 把逗号串当成单个群 ID。
+        self.group_id = group_id or automation.group_id
         self._process: subprocess.Popen[str] | None = None
         self._ready = threading.Event()
         self._stderr_done = threading.Event()
@@ -298,7 +301,7 @@ class RealtimeEventListener:
         args.extend([
             GROUP_EVENT_TYPE,
             "--group",
-            self.automation.group_id,
+            self.group_id,
             "--flatten",
             "--format",
             "ndjson",

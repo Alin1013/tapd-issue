@@ -23,6 +23,8 @@ const DRAFT_TTL_MS = 30 * 60 * 1000;
 const AGENT_EVENT_TIMESTAMP_TTL_MS = 5 * 60 * 1000;
 const AGENT_EVENT_DEDUPE_TTL_MS = 30 * 60 * 1000;
 const AGENT_TEXT_CONTEXT_TTL_MS = 2 * 60 * 1000;
+// 所有自动和手工入口共用该前缀，确保 TAPD 列表能按产品域和反馈来源检索。
+const DEFAULT_BUG_TITLE_PREFIX = '【企业知识中心—用户反馈】';
 const execFileAsync = promisify(execFile);
 
 const MEDIA_TYPES = new Map([
@@ -90,6 +92,7 @@ function getConfig() {
     openaiMaxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 1800),
     mockTapd: String(process.env.MOCK_TAPD || '').toLowerCase() === 'true',
     defaultPriorityLabel: process.env.TAPD_DEFAULT_PRIORITY_LABEL || '中',
+    bugTitlePrefix: process.env.TAPD_BUG_TITLE_PREFIX || DEFAULT_BUG_TITLE_PREFIX,
     // 自动建单的业务默认值集中配置，只有命中 TAPD 候选项时才会写入对应字段。
     defaultIteration: process.env.TAPD_DEFAULT_ITERATION || '企业知识中心9月',
     defaultVersionReport: process.env.TAPD_DEFAULT_VERSION_REPORT || 'v1.3.0',
@@ -475,12 +478,14 @@ function optionLabels(options) {
   return (options || []).map((item) => `${item.label} [value=${item.value}]`).join('\n');
 }
 
-function ensureBugTitleModulePrefix(title, moduleLabel = '') {
+function ensureBugTitleModulePrefix(title, moduleLabel = '', configuredPrefix = '') {
   const rawTitle = String(title || '').trim();
   const fallbackTitle = rawTitle || '待补充问题描述';
   const match = fallbackTitle.match(/^【([^】]+)】\s*(.*)$/s);
   const currentModule = String(match?.[1] || '').trim();
   const detail = String(match?.[2] || fallbackTitle).trim() || '待补充问题描述';
+  const normalizedPrefix = String(configuredPrefix || '').trim();
+  if (normalizedPrefix) return `${normalizedPrefix}${detail}`;
   const normalizedModule = String(moduleLabel || currentModule || '待确认模块').trim();
   return `【${normalizedModule}】${detail}`;
 }
@@ -563,7 +568,7 @@ async function analyzeBugWithOpenAI(mediaLinks, options, config, sourceText = ''
   const prompt = [
       '你是软件测试团队的 Bug Agent。请根据用户提供的截图/视频帧，生成一份可直接写入 TAPD 的缺陷草稿。',
       '只输出 JSON，不要 Markdown，不要编造截图中看不到的事实。',
-      '标题必须严格使用“【模块名称】具体问题描述”格式；模块名称优先使用所选 module 的中文名称，不能省略方括号前缀。description 使用中文，包含【现象】【复现步骤】【期望结果】【环境】等可确认内容。',
+      '标题只返回具体问题描述即可；服务端最终会统一加上“【企业知识中心—用户反馈】”前缀。description 使用中文，包含【现象】【复现步骤】【期望结果】【环境】等可确认内容。',
       '从候选列表中选择最匹配的 module、version_report、iteration_id；匹配不到就返回空字符串。',
       '优先级、严重程度、缺陷根源(source)必须从对应候选列表选择；匹配不到时返回空字符串。',
       '从发布计划候选中选择最匹配的 release_id；如果没有明确线索，返回空字符串，由服务端默认使用最新发布计划。',
@@ -1433,7 +1438,11 @@ function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
     source: input.source || config.defaultSource
   };
   const workspaceId = String(normalizedInput.workspace_id || statePayload?.workspaceId || config.tapdWorkspaceId || '').trim();
-  const title = ensureBugTitleModulePrefix(normalizedInput.title, normalizedInput.module_label || normalizedInput.module);
+  const title = ensureBugTitleModulePrefix(
+    normalizedInput.title,
+    normalizedInput.module_label || normalizedInput.module,
+    config.bugTitlePrefix
+  );
   if (!workspaceId) throw new Error('缺少 workspace_id，请配置 TAPD_WORKSPACE_ID');
   if (!/^\d+$/.test(workspaceId) || Number(workspaceId) <= 0) throw new Error('workspace_id 必须是正整数');
   if (!title) throw new Error('Bug 标题不能为空');

@@ -6,7 +6,9 @@ import argparse
 import json
 import logging
 import sys
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Sequence
+from queue import Queue
 from typing import Any
 
 from .agent import AgentBridgeError, AgentEventForwarder
@@ -146,6 +148,73 @@ def _json_print(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _consume_target_groups(
+    automation: AutomationConfig,
+    listener_factory: Callable[[str], RealtimeEventListener],
+    callback: Callable[[Any], None],
+    max_events: int,
+) -> None:
+    """为每个目标群建立独立 DWS 订阅，并在主线程串行处理事件。"""
+
+    group_ids = tuple(identifier for identifier, _ in automation.configured_groups())
+    if not group_ids:
+        raise ValueError("至少需要配置一个目标群")
+    listeners = [listener_factory(group_id) for group_id in group_ids]
+    if len(listeners) == 1:
+        listeners[0].consume(callback)
+        return
+
+    # DWS 的 --group 只接受一个 openConversationId；并行订阅后用队列汇聚，
+    # 让 SQLite 幂等账本和 TAPD 写入仍在当前线程按序执行。
+    events: Queue[Any | None] = Queue()
+    errors: list[Exception] = []
+    workers: list[threading.Thread] = []
+    stop_requested = threading.Event()
+    for listener in listeners:
+        def run(current: RealtimeEventListener = listener) -> None:
+            """排空一个群订阅的 stdout，并把异常转交主线程。"""
+
+            try:
+                current.consume(events.put)
+            except Exception as exc:  # noqa: BLE001 - 主线程统一收束监听异常
+                errors.append(exc)
+                stop_requested.set()
+                for peer in listeners:
+                    peer.stop()
+            finally:
+                events.put(None)
+
+        worker = threading.Thread(target=run, name=f"dws-group-listener-{listener.group_id}", daemon=True)
+        workers.append(worker)
+        worker.start()
+
+    finished = 0
+    processed = 0
+    stopping = False
+    try:
+        while finished < len(listeners):
+            item = events.get()
+            if item is None:
+                finished += 1
+                continue
+            if stopping or stop_requested.is_set():
+                continue
+            callback(item)
+            processed += 1
+            if max_events and processed >= max_events:
+                stopping = True
+                stop_requested.set()
+                for listener in listeners:
+                    listener.stop()
+    finally:
+        for listener in listeners:
+            listener.stop()
+        for worker in workers:
+            worker.join(timeout=2)
+    if errors:
+        raise errors[0]
+
+
 def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
     """运行实时自动建单；业务默认值从 AutomationConfig 读取而不是命令行重复填写。"""
 
@@ -153,22 +222,25 @@ def _listen(workflow: Workflow, args: argparse.Namespace) -> int:
         raise ValueError("--max-events 不能为负数")
     automation = AutomationConfig.from_env()
     service = AutoIssueService(workflow, automation)
-    listener = RealtimeEventListener(
-        DwsConfig.from_env(),
-        automation,
-        duration=args.duration,
-        max_events=args.max_events,
-    )
+    def listener_factory(group_id: str) -> RealtimeEventListener:
+        """为指定群构造普通自动建单监听器。"""
+
+        return RealtimeEventListener(
+            DwsConfig.from_env(),
+            automation,
+            duration=args.duration,
+            max_events=0,
+            group_id=group_id,
+        )
     try:
         def handle(event: Any) -> None:
             """每条事件单独输出，便于 launchd、日志采集或上层 Agent 增量消费。"""
 
             _json_print(service.process(event).as_dict())
 
-        listener.consume(handle)
+        _consume_target_groups(automation, listener_factory, handle, args.max_events)
         return 0
     finally:
-        listener.stop()
         service.close()
 
 
@@ -181,25 +253,28 @@ def _agent_listen(args: argparse.Namespace) -> int:
     agent = AgentConfig.from_env()
     dws = DwsClient(DwsConfig.from_env())
     forwarder = AgentEventForwarder(dws, agent, automation)
-    listener = RealtimeEventListener(
-        DwsConfig.from_env(),
-        automation,
-        duration=args.duration,
-        max_events=args.max_events,
-        mention_targets=automation.bot_mention_targets,
-        mention_target_ids=automation.bot_mention_target_ids,
-        include_at_me=False,
-    )
+    def listener_factory(group_id: str) -> RealtimeEventListener:
+        """为指定群构造只接收 @缺陷机器人的远端桥接监听器。"""
+
+        return RealtimeEventListener(
+            DwsConfig.from_env(),
+            automation,
+            duration=args.duration,
+            max_events=0,
+            mention_targets=automation.bot_mention_targets,
+            mention_target_ids=automation.bot_mention_target_ids,
+            include_at_me=False,
+            group_id=group_id,
+        )
     try:
         def handle(event: Any) -> None:
             """每个事件独立转发并输出结果，便于 systemd 日志审计和故障重试。"""
 
             _json_print(forwarder.process(event))
 
-        listener.consume(handle)
+        _consume_target_groups(automation, listener_factory, handle, args.max_events)
         return 0
     finally:
-        listener.stop()
         # DwsClient 目前由短命 CLI 进程持有，保留兼容未来增加连接池的关闭钩子。
         close = getattr(dws, "close", None)
         if callable(close):

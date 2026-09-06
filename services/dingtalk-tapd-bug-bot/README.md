@@ -54,7 +54,7 @@ https://你的公网HTTPS地址/dingtalk/callback
 - 识别 `新建Bug`、`创建Bug`、`建Bug` 等文本。
 - 使用机器人回调中的 `sessionWebhook` 回复 ActionCard。
 - ActionCard 打开同一服务的 `/` 表单页。
-- Bug Agent 模式下，单聊直接发送图片/视频即可开始分析；默认会直接创建 Bug 并通过 `sessionWebhook` 或群消息回执结果。
+- Bug Agent 模式下，在已加入机器人的群里 @缺陷机器人并发送文字、图片或视频即可开始分析；默认会直接创建 Bug 并通过 `sessionWebhook` 或群消息回执结果。当前“测试机器人”群已验证该回执链路。
 
 钉钉必须能够从公网访问回调地址。开发阶段可以使用带 HTTPS 的公网隧道；生产环境建议部署到云函数、容器服务或一台有固定公网 HTTPS 域名的服务器。
 

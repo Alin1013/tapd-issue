@@ -38,7 +38,7 @@ class AgentEventForwarder:
     def process(self, event: RealtimeEvent) -> dict[str, Any]:
         """处理一条目标群事件；远端返回 ``accepted`` 或 ``duplicate`` 状态。"""
 
-        if event.conversation_id != self.automation.group_id:
+        if not self.automation.is_target_group(event.conversation_id):
             return {"status": "ignored", "messageId": event.message_id, "reason": "非目标群"}
         if not event.is_automation_trigger(
             self.automation.bot_mention_targets,

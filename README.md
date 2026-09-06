@@ -34,11 +34,11 @@ export TAPD_API_PASSWORD=...
 dingtalk-tapd listen
 ```
 
-监听使用 `dws event consume user_im_message_receive_at user_im_message_receive_group --group cid3SbKZNiotRpk9RdlluSUSA== --flatten --format ndjson`，同时接收当前用户的 @ 消息和目标群事件。实时群事件只放行配置中的 @ 目标；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
+监听会为配置中的每个群分别建立 `dws event consume user_im_message_receive_at user_im_message_receive_group --group <openConversationId> --flatten --format ndjson` 订阅，默认同时兼容 `DeepWorks 产品交流群` 和“测试机器人”。实时群事件只放行配置中的 @ 目标；当前用户的 @ 由 DWS 的 `user_im_message_receive_at` 事件放行。没有 @ 的历史消息请使用下面的 `sync` 命令扫描。实时和同步最终都只提交与企业知识中心、知识库或知识管理有关的内容。
 
 - 使用 TAPD 项目 `57379524`，类型固定为 Bug，负责人固定为 `雷艾琳`；
 - 根据影响词设置优先级（明确紧急/P0 为 `urgent`，阻断故障为 `high`，建议/咨询为 `low`，无法判断为 `medium`）；
-- 生成 `【用户反馈】问题摘要-YYYYMMDD-HHMMSS` 标题；
+- 生成 `【企业知识中心—用户反馈】问题描述` 标题；
 - 用 `+messages-mget --download-resources` 下载截图/附件，在描述中保留本地路径、资源 ID、消息 ID 和下载失败原因；
 - 对本地图片尝试使用系统 `tesseract` 做 OCR。没有中文语言包或视觉分析器时，会明确标注“原图待查看”，不会虚构截图内容；
 - 以 `conversationId:messageId` 写入 `.dingtalk-tapd/state.sqlite3`，同一消息只建一次工单。
@@ -71,7 +71,7 @@ dingtalk-tapd sync \
 
 同步结果为 partial 时默认只输出完整性告警、不自动写入；确认时间范围后可显式加 `--allow-partial`。
 
-高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_DEVELOPER`、`DINGTALK_TAPD_TESTER`（默认 `雷艾琳`）、`DINGTALK_TAPD_RESPONSIBILITY_WHITELIST`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`、`DINGTALK_TAPD_MENTION_TARGET_IDS`、`DINGTALK_TAPD_BOT_MENTION_TARGETS`（默认 `缺陷机器人`）、`DINGTALK_TAPD_BOT_MENTION_TARGET_IDS`（默认使用缺陷机器人的稳定 ID）。白名单使用 JSON 数组或对象，规则中的 `match/module/keywords` 用于匹配消息，`owner/current_owner` 和 `developer/de` 用于分配字段。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
+高级覆盖项（正常使用不需要填写）：`DINGTALK_TAPD_GROUPS`、`DINGTALK_TAPD_GROUP_ID`、`DINGTALK_TAPD_GROUP_NAME`、`DINGTALK_TAPD_WORKSPACE_ID`、`DINGTALK_TAPD_OWNER`、`DINGTALK_TAPD_DEVELOPER`、`DINGTALK_TAPD_TESTER`（默认 `雷艾琳`）、`DINGTALK_TAPD_RESPONSIBILITY_WHITELIST`、`DINGTALK_TAPD_TITLE_PREFIX`、`DINGTALK_TAPD_STATE_DB`、`DINGTALK_TAPD_ATTACHMENT_DIR`、`DINGTALK_TAPD_READY_TIMEOUT`、`DINGTALK_TAPD_OCR_COMMAND`、`DINGTALK_TAPD_MENTION_TARGETS`、`DINGTALK_TAPD_MENTION_TARGET_IDS`、`DINGTALK_TAPD_BOT_MENTION_TARGETS`（默认 `缺陷机器人`）、`DINGTALK_TAPD_BOT_MENTION_TARGET_IDS`（默认使用缺陷机器人的稳定 ID）。`DINGTALK_TAPD_GROUPS` 使用 `[ {"id":"openConversationId","name":"群名"} ]`；旧的单群 ID/名称变量仍可继续使用，显式设置它们时只监听该群。白名单使用 JSON 数组或对象，规则中的 `match/module/keywords` 用于匹配消息，`owner/current_owner` 和 `developer/de` 用于分配字段。附件目录必须是工作目录内相对路径，符合 DWS 的下载安全约束。
 
 TAPD MCP 只有在工具契约声明支持时才接受图片/视频公网直链作为富媒体；旧版 MCP 会自动降级为把直链写入描述。钉钉下载到本地的文件不会被冒充成“已上传”，当前未实现把本地文件直接上传到 TAPD 的未验证接口。
 

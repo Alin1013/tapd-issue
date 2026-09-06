@@ -57,14 +57,15 @@ node server.js
 | `TAPD_API_PASSWORD` | 否 | 空 | REST Basic 认证密码 |
 | `TAPD_API_BASE_URL` | 否 | `https://api.tapd.cn` | TAPD API 地址 |
 | `TAPD_BASE_URL` | 否 | `https://www.tapd.cn` | TAPD 页面地址，传给 MCP 生成链接 |
-| `DINGTALK_TAPD_GROUP_ID` | 自动流程需要 | `cid3SbKZNiotRpk9RdlluSUSA==` | 目标群的稳定 `openConversationId` |
-| `DINGTALK_TAPD_GROUP_NAME` | 否 | `DeepWorks 产品交流群` | 写入来源描述时展示的群名 |
+| `DINGTALK_TAPD_GROUPS` | 自动流程可选 | `[ {"id":"...","name":"..."} ]` | 多群目标；每个群会建立独立 DWS 订阅 |
+| `DINGTALK_TAPD_GROUP_ID` | 兼容旧配置 | `cid3SbKZNiotRpk9RdlluSUSA==` | 旧版单群稳定 `openConversationId`；显式设置后优先只监听该群 |
+| `DINGTALK_TAPD_GROUP_NAME` | 兼容旧配置 | `DeepWorks 产品交流群` | 旧版单群展示名称，与 `DINGTALK_TAPD_GROUP_ID` 配套使用 |
 | `DINGTALK_TAPD_WORKSPACE_ID` | 自动流程需要 | `57379524` | 自动建单的 TAPD 项目 ID |
 | `DINGTALK_TAPD_OWNER` | 否 | `雷艾琳` | 自动建单负责人 |
 | `DINGTALK_TAPD_DEVELOPER` | 否 | 空 | 未命中白名单时的默认开发人 |
 | `DINGTALK_TAPD_TESTER` | 否 | `雷艾琳` | 自动建单测试人；当前不会按模块切换 |
 | `DINGTALK_TAPD_RESPONSIBILITY_WHITELIST` | 否 | 空 | JSON 规则；按消息/模块关键词选择负责人和开发人 |
-| `DINGTALK_TAPD_TITLE_PREFIX` | 否 | `【用户反馈】` | 自动 Bug 标题前缀 |
+| `DINGTALK_TAPD_TITLE_PREFIX` | 否 | `【企业知识中心—用户反馈】` | 自动 Bug 标题前缀，后面直接拼接问题描述 |
 | `DINGTALK_TAPD_STATE_DB` | 否 | `.dingtalk-tapd/state.sqlite3` | 事件幂等和失败记录的 SQLite 文件 |
 | `DINGTALK_TAPD_ATTACHMENT_DIR` | 否 | `.dingtalk-tapd/attachments` | DWS 下载资源目录，必须是工作目录内相对路径 |
 | `DINGTALK_TAPD_READY_TIMEOUT` | 否 | `30` | DWS 实时监听等待 ready 的秒数 |
@@ -111,6 +112,7 @@ node server.js
 | `TAPD_DEFAULT_TESTER` | 否 | `雷艾琳` | Node 自动模式统一写入的测试人 |
 | `TAPD_RESPONSIBILITY_WHITELIST` | 否 | 空 | Node 自动模式的模块/关键词责任人 JSON 规则 |
 | `TAPD_DEFAULT_PRIORITY_LABEL` | 否 | `中` | 表单未选择优先级时的默认值 |
+| `TAPD_BUG_TITLE_PREFIX` | 否 | `【企业知识中心—用户反馈】` | Node 最终写入 TAPD 的标题前缀，后面直接拼接问题描述 |
 | `TAPD_DEFAULT_ITERATION` | 否 | `企业知识中心9月` | 自动建单默认迭代；仅在 TAPD 迭代候选中命中时写入 ID |
 | `TAPD_DEFAULT_VERSION_REPORT` | 否 | `v1.3.0` | 自动建单默认发现版本；仅在 TAPD 版本候选中命中时写入 |
 | `TAPD_DEFAULT_MODULE` | 否 | `企业知识中心` | 自动建单默认模块；仅在 TAPD 模块候选中命中时写入 |
