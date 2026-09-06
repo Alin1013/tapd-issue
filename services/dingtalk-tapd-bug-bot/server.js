@@ -1916,21 +1916,13 @@ async function sendDingTalkMessage(sessionWebhook, payload) {
   return response;
 }
 
-function buildBugCreatedNotification(result, payload, attachments, bugUrl, mediaCount = 0, senderName = '') {
-  /** 统一成功通知正文，webhook 与群消息 OpenAPI 共用同一份文案。 */
-  const attachmentDetail = attachmentStatusText(attachments, mediaCount);
+function buildBugCreatedNotification(_result, _payload, _attachments, _bugUrl, _mediaCount = 0, senderName = '') {
+  /**
+   * 统一成功通知正文，webhook 与群消息 OpenAPI 共用同一份文案。
+   * 详细字段已经写入 TAPD，群内只保留可追踪的提醒，避免重复刷屏。
+   */
   const mention = senderName ? `@${String(senderName).replaceAll('\n', ' ')} ` : '';
-  return [
-    `${mention}当前问题已记录，后续结果持续跟踪同步`,
-    `- Bug ID：**${result.id}**`,
-    `- 标题：${payload.title}`,
-    payload.current_owner ? `- 处理人：${payload.current_owner}` : '',
-    payload.de ? `- 开发人：${payload.de}` : '',
-    payload.te ? `- 测试人：${payload.te}` : '',
-    `- ${attachmentDetail}`,
-    ...(attachments?.failures || []).map((failure) => `- 附件失败：${failure.name}（${failure.error}）`),
-    `- [打开 TAPD 缺陷](${bugUrl})`
-  ].join('\n');
+  return `${mention}当前问题已记录，后续结果持续跟踪同步`;
 }
 
 async function notifyBugCreated(draft, result, payload, attachments, bugUrl, config) {
@@ -1944,7 +1936,8 @@ async function notifyBugCreated(draft, result, payload, attachments, bugUrl, con
     draft.media?.length || 0,
     draft.senderName
   );
-  const webhookPayload = buildDingTalkMarkdown('TAPD Bug 创建成功', text.split('\n'));
+  // 成功详情以 TAPD 为准，群内只发送跟踪提醒；空标题避免钉钉再次渲染“创建成功”标题。
+  const webhookPayload = { msgtype: 'markdown', markdown: { title: '', text } };
   if (draft.senderStaffId) {
     webhookPayload.at = { atUserIds: [String(draft.senderStaffId)], isAtAll: false };
   }
@@ -1960,7 +1953,7 @@ async function notifyBugCreated(draft, result, payload, attachments, bugUrl, con
     robotCode: config.dingTalkRobotCode,
     openConversationId: draft.conversationId,
     msgKey: 'sampleMarkdown',
-    msgParam: JSON.stringify({ title: 'TAPD Bug 创建成功', text }),
+    msgParam: JSON.stringify({ title: '', text }),
     atUserIds: draft.senderStaffId ? [String(draft.senderStaffId)] : [],
     userIdType: 1
   }, config);
@@ -2633,21 +2626,15 @@ async function handleDingTalkCallback(request, response, config) {
   if (isDuplicateCallback(body.msgId)) return sendJson(response, 200, {});
   // 用户可以只发文字直接建单；若随后发送媒体，文字仍会短暂保留供媒体批次合并。
   const callbackText = extractDingTalkMessageText(body);
-  if (config.enableBugAgent && callbackText && !isMediaMessage(body)) {
-    enqueueAgentText(request, body, config);
-    return sendJson(response, 200, buildDingTalkMarkdown('Bug Agent 已收到描述', [
-      '正在分析文字描述并自动创建 TAPD Bug。'
-    ]));
-  }
-  if (config.enableBugAgent && isMediaMessage(body)) {
-    if (!extractDingTalkMediaItems(body).length) {
-      return sendJson(response, 200, buildDingTalkMarkdown('Bug Agent', ['没有识别到可分析的图片或视频。']));
+  if (config.enableBugAgent) {
+    if (callbackText && !isMediaMessage(body)) {
+      enqueueAgentText(request, body, config);
+    } else if (isMediaMessage(body)) {
+      // 媒体下载和建单在后台执行；空响应可避免钉钉把处理中间卡片展示到群里。
+      if (extractDingTalkMediaItems(body).length) enqueueAgentMedia(request, body, config);
     }
-    enqueueAgentMedia(request, body, config);
-    return sendJson(response, 200, buildDingTalkMarkdown('Bug Agent 已收到媒体', [
-      '正在分析截图/视频并生成 Bug 草稿。',
-      '稍后会返回可编辑的草稿，只有你点击确认后才会创建 TAPD Bug。'
-    ]));
+    // @机器人只返回协议层确认，最终结果通过 notifyBugCreated 单独回群。
+    return sendJson(response, 200, {});
   }
   const content = String(body?.text?.content || '').replace(/@[^\s]+/g, '').trim();
   const isBugCommand = /新建\s*bug|创建\s*bug|建\s*bug|bug/i.test(content);
