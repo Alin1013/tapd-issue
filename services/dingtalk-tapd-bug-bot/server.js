@@ -61,6 +61,12 @@ function getConfig() {
     tapdAttachmentType: process.env.TAPD_ATTACHMENT_TYPE || 'bug',
     tapdAttachmentCustomField: process.env.TAPD_ATTACHMENT_CUSTOM_FIELD || '',
     tapdAttachmentOwner: process.env.TAPD_ATTACHMENT_OWNER || '',
+    // 自动入口默认直接建单；设置为 false 才回退到可编辑草稿与人工确认。
+    autoCreateBugs: String(process.env.TAPD_AUTO_CREATE_BUGS || 'true').toLowerCase() !== 'false',
+    defaultOwner: process.env.TAPD_DEFAULT_OWNER || '雷艾琳',
+    defaultDeveloper: process.env.TAPD_DEFAULT_DEVELOPER || '',
+    defaultTester: process.env.TAPD_DEFAULT_TESTER || '雷艾琳',
+    responsibilityWhitelist: parseResponsibilityWhitelist(process.env.TAPD_RESPONSIBILITY_WHITELIST || ''),
     dingTalkClientSecret: process.env.DINGTALK_CLIENT_SECRET || '',
     formSecret: process.env.DINGTALK_FORM_SECRET || '',
     dingTalkAppKey: process.env.DINGTALK_APP_KEY || '',
@@ -87,6 +93,44 @@ function getConfig() {
     tapdBugUrlTemplate: process.env.TAPD_BUG_URL_TEMPLATE ||
       'https://www.tapd.cn/{workspace_id}/bugtrace/bugs/view?bug_id={id}'
   };
+}
+
+function parseResponsibilityWhitelist(rawValue) {
+  /**
+   * 将环境变量中的模块责任映射规范化为统一规则，兼容数组和“模块名 -> 责任人”对象。
+   * 这样后续补充责任人时只需更新密钥管理中的 JSON，不需要修改代码或重新确认卡片。
+   */
+  const source = String(rawValue || '').trim();
+  if (!source) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new Error('TAPD_RESPONSIBILITY_WHITELIST 必须是合法 JSON');
+  }
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : Object.entries(parsed || {}).map(([match, value]) => ({
+      match,
+      ...(value && typeof value === 'object' ? value : { current_owner: value })
+    }));
+  return candidates.map((rule) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+      throw new Error('TAPD_RESPONSIBILITY_WHITELIST 的每条规则必须是 JSON 对象');
+    }
+    const matches = [rule.match, rule.module, rule.modules, rule.keyword, rule.keywords]
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+    const pick = (...keys) => keys.map((key) => rule[key]).find((value) => value !== undefined && value !== null && String(value).trim()) || '';
+    return {
+      matches,
+      current_owner: String(pick('current_owner', 'currentOwner', 'owner', 'handler', '处理人') || '').trim(),
+      de: String(pick('de', 'developer', 'developerName', '开发人') || '').trim(),
+      te: String(pick('te', 'tester', 'testerName', '测试人') || '').trim(),
+      defaultRule: matches.some((match) => ['*', 'default', '默认'].includes(match.toLowerCase()))
+    };
+  }).filter((rule) => rule.matches.length || rule.current_owner || rule.de || rule.te);
 }
 
 function timingSafeEqualText(left, right) {
@@ -631,6 +675,13 @@ function renderAgentUnavailableCard(message) {
 function getAgentStatus(config) {
   return {
     enabled: config.enableBugAgent,
+    automation: {
+      autoCreateBugs: Boolean(config.autoCreateBugs),
+      responsibilityRules: (config.responsibilityWhitelist || []).length,
+      defaultOwner: String(config.defaultOwner || ''),
+      defaultDeveloperConfigured: Boolean(config.defaultDeveloper),
+      defaultTester: String(config.defaultTester || '')
+    },
     openai: {
       configured: Boolean(config.openaiApiKey),
       model: config.openaiModel,
@@ -769,7 +820,27 @@ async function processAgentBatch(batch, config) {
       expiresAt: Date.now() + DRAFT_TTL_MS
     });
     const storedDraft = bugDrafts.get(draftId);
+    applyAutomaticResponsibility(storedDraft, config);
     storedDraft.reviewUrl = new URL(`/draft/${draftId}`, batch.publicBaseUrl).toString();
+    if (config.autoCreateBugs) {
+      // 自动模式直接完成 TAPD 写入，责任人字段已在白名单解析后锁定，不再等待卡片确认。
+      storedDraft.status = 'creating';
+      const created = await createConfirmedDraft(storedDraft, config);
+      try {
+        await notifyBugCreated(storedDraft, { id: created.id }, created.payload, created.attachments, created.url, config);
+      } catch (error) {
+        // 建单已经成功，通知失败只记日志，避免后续重试再次产生重复 Bug。
+        console.error('[agent] automated result notification failed:', error.message);
+      }
+      console.log('[agent] automated bug created', JSON.stringify({
+        draftId,
+        bugId: created.id,
+        owner: storedDraft.current_owner,
+        developer: storedDraft.de,
+        tester: storedDraft.te
+      }));
+      return;
+    }
     let interactiveSent = null;
     if (cardTemplateConfigured(config)) {
       try {
@@ -816,7 +887,27 @@ async function processForwardedAgentEvent(request, body, config) {
       expiresAt: Date.now() + DRAFT_TTL_MS
     });
     const storedDraft = bugDrafts.get(draftId);
+    applyAutomaticResponsibility(storedDraft, config);
     storedDraft.reviewUrl = new URL(`/draft/${draftId}`, buildPublicBase(request, config)).toString();
+    if (config.autoCreateBugs) {
+      // 桥接事件与本地监听器共享自动路径，保证两种入口的责任人和测试人规则一致。
+      storedDraft.status = 'creating';
+      const created = await createConfirmedDraft(storedDraft, config);
+      try {
+        await notifyBugCreated(storedDraft, { id: created.id }, created.payload, created.attachments, created.url, config);
+      } catch (error) {
+        console.error('[agent-bridge] automated result notification failed:', error.message);
+      }
+      console.log('[agent-bridge] automated bug created', JSON.stringify({
+        eventId: body.eventId,
+        draftId,
+        bugId: created.id,
+        owner: storedDraft.current_owner,
+        developer: storedDraft.de,
+        tester: storedDraft.te
+      }));
+      return;
+    }
     let interactiveSent = null;
     if (cardTemplateConfigured(config)) {
       try {
@@ -1272,8 +1363,15 @@ function buildDescription(input) {
 }
 
 function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
-  const workspaceId = String(input.workspace_id || statePayload?.workspaceId || config.tapdWorkspaceId || '').trim();
-  const title = ensureBugTitleModulePrefix(input.title, input.module_label || input.module);
+  // H5 表单和自动 Agent 共用同一套默认字段，确保手工补录也不会遗漏测试人。
+  const normalizedInput = {
+    ...input,
+    current_owner: input.current_owner || config.defaultOwner,
+    de: input.de || config.defaultDeveloper,
+    te: input.te || config.defaultTester
+  };
+  const workspaceId = String(normalizedInput.workspace_id || statePayload?.workspaceId || config.tapdWorkspaceId || '').trim();
+  const title = ensureBugTitleModulePrefix(normalizedInput.title, normalizedInput.module_label || normalizedInput.module);
   if (!workspaceId) throw new Error('缺少 workspace_id，请配置 TAPD_WORKSPACE_ID');
   if (!/^\d+$/.test(workspaceId) || Number(workspaceId) <= 0) throw new Error('workspace_id 必须是正整数');
   if (!title) throw new Error('Bug 标题不能为空');
@@ -1281,9 +1379,9 @@ function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
   const payload = {
     workspace_id: Number(workspaceId),
     title,
-    description: renderTapdDescriptionHtml(input, mediaLinks),
-    priority_label: String(input.priority_label || config.defaultPriorityLabel).trim(),
-    severity: String(input.severity || 'normal').trim()
+    description: renderTapdDescriptionHtml(normalizedInput, mediaLinks),
+    priority_label: String(normalizedInput.priority_label || config.defaultPriorityLabel).trim(),
+    severity: String(normalizedInput.severity || 'normal').trim()
   };
 
   const optionalFields = [
@@ -1293,8 +1391,8 @@ function buildTapdPayload(input, config, statePayload = null, mediaLinks = []) {
     'label', 'deadline', 'begin', 'due', 'estimate', 'effort', 'template_id'
   ];
   for (const field of optionalFields) {
-    if (input[field] !== undefined && input[field] !== null && String(input[field]).trim() !== '') {
-      payload[field] = input[field];
+    if (normalizedInput[field] !== undefined && normalizedInput[field] !== null && String(normalizedInput[field]).trim() !== '') {
+      payload[field] = normalizedInput[field];
     }
   }
   return payload;
@@ -1452,6 +1550,53 @@ function extractUsers(result) {
     })
     .filter((item) => item.value && item.label)
     .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+}
+
+function findTapdUser(users, requested) {
+  /** 按 TAPD 用户名或展示姓名解析成员，避免把中文姓名直接误写成账号字段。 */
+  const normalized = String(requested || '').trim();
+  if (!normalized) return null;
+  return (users || []).find((user) => {
+    const label = String(user?.label || '');
+    const displayName = label.split('（', 1)[0].trim();
+    return String(user?.value || '') === normalized || label === normalized || displayName === normalized;
+  }) || null;
+}
+
+function applyAutomaticResponsibility(draft, config) {
+  /**
+   * 根据 AI 解析出的模块/标题/描述选择白名单规则，并把姓名校验为 TAPD 成员账号。
+   * 没有命中规则时使用默认负责人，测试人始终覆盖为配置的雷艾琳账号。
+   */
+  const corpus = [draft.module_label, draft.module, draft.title, draft.description]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
+  const rules = config.responsibilityWhitelist || [];
+  const rule = rules.find((item) => item.defaultRule) || null;
+  const matchedRule = rules.find((item) => item.matches.some((match) => match !== '*' && corpus.includes(String(match).toLowerCase()))) || rule;
+  const selected = matchedRule || {};
+  const users = draft.options?.users || [];
+  const resolve = (requested, fallback) => {
+    const candidate = findTapdUser(users, requested || fallback);
+    return {
+      value: candidate?.value || String(requested || fallback || '').trim(),
+      label: candidate?.label || String(requested || fallback || '').trim()
+    };
+  };
+
+  const owner = resolve(selected.current_owner, config.defaultOwner);
+  const developer = resolve(selected.de, config.defaultDeveloper);
+  const tester = resolve(config.defaultTester, config.defaultTester);
+  draft.current_owner = owner.value;
+  draft.current_owner_label = owner.label;
+  draft.de = developer.value;
+  draft.developer_label = developer.label;
+  // 当前阶段所有自动建单都写入同一个测试人，避免责任人名单尚未补齐时漏填测试字段。
+  draft.te = tester.value;
+  draft.tester_label = tester.label;
+  draft.responsibilityRule = matchedRule === rule && !matchedRule?.matches?.length ? 'default' : (matchedRule?.matches || []);
+  return draft;
 }
 
 async function getTapdOptions(workspaceId, config) {
